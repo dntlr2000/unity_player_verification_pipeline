@@ -10,6 +10,7 @@ using UnityEngine;
 using UnityEngine.SceneManagement;
 
 [assembly: InternalsVisibleTo("UnityPlayerVerification.ScenarioTests")]
+[assembly: InternalsVisibleTo("UnityPlayerVerification.Standalone")]
 
 namespace UnityPlayerVerification
 {

@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "1.0.0",
+  "schemaVersion": "1.1.0",
   "entries": [
     {
       "unityVersion": "2022.3.62f3",
@@ -13,6 +13,10 @@
       "scriptingBackend": "Mono",
       "windowsModuleTreeSha256": "985b3336582a618371a10727ffdb0a8f12fed4f617df5c9054a23d58f4c828e3",
       "moduleHashCanonicalization": "upvr-tree-relative-path-length-sha256-lf-v1",
+      "toolchainIdentitySha256": null,
+      "visualStudioVersion": null,
+      "msvcVersion": null,
+      "windowsSdkVersion": null,
       "minimumPhase": "P1",
       "status": "APPROVED",
       "evidencePath": "docs/validation/unity-player-verification-real-unity-acceptance.md"
@@ -29,6 +33,10 @@
       "scriptingBackend": "Mono",
       "windowsModuleTreeSha256": "287e51fd036a046e98082a64653bd7e1727463e3a41d022777d66e99a0098653",
       "moduleHashCanonicalization": "upvr-tree-relative-path-length-sha256-lf-v1",
+      "toolchainIdentitySha256": null,
+      "visualStudioVersion": null,
+      "msvcVersion": null,
+      "windowsSdkVersion": null,
       "minimumPhase": "P1",
       "status": "APPROVED",
       "evidencePath": "docs/validation/unity-player-verification-real-unity-acceptance.md"
@@ -45,6 +53,10 @@
       "scriptingBackend": "Mono",
       "windowsModuleTreeSha256": "ba4c0ac41f2f6adf27f7df615905cd2b704f47e8d9582b65d5545bc9912a8afb",
       "moduleHashCanonicalization": "upvr-tree-relative-path-length-sha256-lf-v1",
+      "toolchainIdentitySha256": null,
+      "visualStudioVersion": null,
+      "msvcVersion": null,
+      "windowsSdkVersion": null,
       "minimumPhase": "P1",
       "status": "APPROVED",
       "evidencePath": "docs/validation/unity-player-verification-real-unity-acceptance.md"

@@ -364,6 +364,13 @@ function Invoke-UnityProcessInJob {
         [int]$RunTimeoutSeconds = 0,
 
         [Parameter()]
+        [ValidateRange(0, 86400)]
+        [int]$ObservationSeconds = 0,
+
+        [Parameter()]
+        [switch]$CloseMainWindowAfterObservation,
+
+        [Parameter()]
         [AllowNull()]
         [string]$FailureSignalPath,
 
@@ -389,6 +396,11 @@ function Invoke-UnityProcessInJob {
         buildPhaseCompleted = $false
         buildElapsedMilliseconds = 0
         runElapsedMilliseconds = 0
+        observationCompleted = $false
+        responsiveObserved = $false
+        mainWindowHandle = [long]0
+        closeMainWindowRequested = $false
+        closeMainWindowSucceeded = $false
         failureSignalObserved = $false
         exitCode = $null
         terminationRequested = $false
@@ -533,6 +545,7 @@ function Invoke-UnityProcessInJob {
         )
         $waitStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
         $runPhaseStartedMilliseconds = [long]0
+        $responsiveObservationStartedMilliseconds = [long]-1
         $rootWaitResult = [uint32][UnityBaselineProcess.NativeMethods]::WaitTimeout
         while ($true) {
             $rootWaitResult = [UnityBaselineProcess.NativeMethods]::WaitForSingleObject($processInformation.Process, [uint32]100)
@@ -572,6 +585,35 @@ function Invoke-UnityProcessInJob {
                 $result.terminationRequested = $true
                 $result.terminationReason = 'TIMEOUT'
                 break
+            }
+            if ($ObservationSeconds -gt 0) {
+                try {
+                    $observedProcess = Get-Process -Id ([int]$processInformation.ProcessId) -ErrorAction Stop
+                    $observedProcess.Refresh()
+                    $windowHandle = [long]$observedProcess.MainWindowHandle
+                    $responding = [bool]$observedProcess.Responding
+                    if ($windowHandle -ne 0 -and $responding) {
+                        $result.responsiveObserved = $true
+                        $result.mainWindowHandle = $windowHandle
+                        if ($responsiveObservationStartedMilliseconds -lt 0) {
+                            $responsiveObservationStartedMilliseconds = [long]$waitStopwatch.ElapsedMilliseconds
+                        }
+                        if (([long]$waitStopwatch.ElapsedMilliseconds - $responsiveObservationStartedMilliseconds) -ge ([long]$ObservationSeconds * 1000)) {
+                            $result.observationCompleted = $true
+                            if ($CloseMainWindowAfterObservation) {
+                                $result.closeMainWindowRequested = $true
+                                $result.closeMainWindowSucceeded = [bool]$observedProcess.CloseMainWindow()
+                            }
+                            $result.terminationRequested = $true
+                            $result.terminationReason = 'OBSERVATION_COMPLETE'
+                            break
+                        }
+                    } else {
+                        $responsiveObservationStartedMilliseconds = [long]-1
+                    }
+                } catch [System.ArgumentException] {
+                } catch [System.InvalidOperationException] {
+                }
             }
             if (
                 -not [string]::IsNullOrWhiteSpace($FailureSignalPath) -and

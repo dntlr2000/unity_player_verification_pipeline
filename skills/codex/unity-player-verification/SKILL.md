@@ -7,7 +7,7 @@ description: "Run approved Unity Windows Test Player, source-only Player scenari
 
 Use the bundled PowerShell entrypoint as the sole source of dynamic Player verification truth. It preserves the source project, accepts only exact approved Unity/Test Framework/Windows Support identities, controls spawned processes, and requires mode-specific receipts before making a positive claim.
 
-Component `0.2.0` enables `TEST_PLAYER` and `SCENARIO_TEST_PLAYER`. The Standalone modes remain fail-closed until component `0.3.0` is locally approved.
+Candidate component `0.3.0-rc.1` enables all four modes. Test Player modes remain sealed to Mono; instrumented Standalone mode accepts only exact approved tuples. The current registry approves Mono only, so every IL2CPP request must remain blocked until a complete real-Unity IL2CPP matrix is approved.
 
 ## Invocation policy
 
@@ -15,7 +15,7 @@ Component `0.2.0` enables `TEST_PLAYER` and `SCENARIO_TEST_PLAYER`. The Standalo
 - Never invoke this Skill implicitly or as an automatic continuation of Doctor, Baseline, or `$unity-play-verification`.
 - Never install or update Unity, modules, packages, Visual Studio, toolchains, or SDKs.
 - Never open or modify the source Unity project; Unity receives only the verifier-created external copy.
-- Put Codex-operated validation artifacts under `E:\CodexValidation`, set `TEMP` and `TMP` to `E:\CodexTemp`, and reject C-drive project copies, builds, logs, and executable paths.
+- Put Codex-operated validation artifacts under `E:\CodexValidation`, set `TEMP` and `TMP` to `E:\CodexTemp`, and reject C-drive source projects, project copies, builds, Player executables, and logs. A signed Unity editor may remain in its normal `C:\Program Files\Unity` installation.
 
 ## Entrypoint
 
@@ -28,6 +28,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File $runner `
 ```
 
 Use `-TestFilter`, `-TestCategory`, and `-AssemblyNames` only in `TEST_PLAYER`. Use `-ScenarioBundlePath` only in scenario modes. Use `-BuildRoot`, `-PlayerExecutable`, and optional `-BuildReceiptPath` only in `PREBUILT_STANDALONE`. Never append arbitrary Unity or Player arguments.
+
+For `INSTRUMENTED_STANDALONE`, require a reviewed Standalone scenario bundle and choose `-ScriptingBackend Mono`, `IL2CPP`, or `Project`. Treat `Project` as a request to preserve the serialized Standalone backend; it still must resolve to an approved exact tuple. For `PREBUILT_STANDALONE`, execute only the exact user-supplied EXE. Never invent, edit, or substitute a build receipt.
 
 ## Source-only scenarios
 

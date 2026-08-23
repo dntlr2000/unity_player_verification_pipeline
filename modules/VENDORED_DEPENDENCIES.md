@@ -10,8 +10,8 @@ The following files are immutable internal copies from `unity_play_verification_
 | `scripts/vendor/shared/json-schema-validator.ps1` | `e93ec93f8c2ce6e1db1065dc12ede3a4a503ffc5060262fca63acc9211ed97c7` |
 | `scripts/vendor/shared/unity-baseline-orchestration.ps1` | `395af0d5341da7c3b6405338b6842449c5c91e9ddf8261c4c52512af627e4c37` |
 | `scripts/vendor/shared/unity-isolation-path-budget.ps1` | `24f9b9b10fa70ab66ed5a5a5ad19516d1ec4ccc5152a9f89a453e7d0ae246974` |
-| `scripts/vendor/shared/unity-process-job.ps1` | `f1e6caa35391777c30a0372f0aabbfe5b144d5aebcea87cf4ed3239201e0a128` |
+| `scripts/vendor/shared/unity-process-job.ps1` | `9b81cf604741d44cdf7097193c661e26a3f1234e69efe3b19f75589b060707fa` |
 | `scripts/lib/unity-play-verification-core.ps1` | `1c40fa02c5a2d44bc2c7af6f162949bc57dbc41c8bf7fe988bee36026e7e400c` |
 | `scripts/lib/unity-test-framework-identity.ps1` | `ecd29468afe9986b3e4ec3c839ce1174bf2b1dbca2eab2f01f13280ef2eb852b` |
 
-The copied `Upv` function prefix is retained intentionally. These functions execute only inside the new verifier process and are wrapped by Player-specific `Upvr` functions. The Job Object copy is the sole derived module: it preserves the reviewed native process setup and adds build-receipt phase transition, independent build/run deadlines, and an explicit retained failure-signal stop. Its derived hash is pinned above and covered by Player-specific tests.
+The copied `Upv` function prefix is retained intentionally. These functions execute only inside the new verifier process and are wrapped by Player-specific `Upvr` functions. The Job Object copy is the sole derived module: it preserves the reviewed native process setup and adds build-receipt phase transition, independent build/run deadlines, an explicit retained failure-signal stop, and the bounded responsive-window observation used by opaque P3 executables. Its derived hash is pinned above and covered by Player-specific tests.

@@ -66,8 +66,8 @@ $ProgressPreference = 'SilentlyContinue'
 
 $script:Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $script:SchemaVersion = '1.0.0'
-$script:ComponentVersion = '0.2.0'
-$script:VerifierVersion = '0.2.0'
+$script:ComponentVersion = '0.3.0-rc.1'
+$script:VerifierVersion = '0.3.0-rc.1'
 $script:ExpectedDoctorSchemaVersion = '1.1.0'
 $script:ExpectedDoctorScannerVersion = '0.2.1'
 $script:SkillRoot = Split-Path -Parent $PSScriptRoot
@@ -86,6 +86,7 @@ $script:PlayerCoreLibraryPath = Join-Path $PSScriptRoot 'lib\unity-player-verifi
 $script:CompatibilityRegistryPath = Join-Path $script:SkillRoot 'config\unity-player-compatibility.json'
 $script:P1InfrastructureRoot = Join-Path $script:SkillRoot 'infrastructure\p1'
 $script:P2InfrastructureRoot = Join-Path $script:SkillRoot 'infrastructure\p2'
+$script:P3InfrastructureRoot = Join-Path $script:SkillRoot 'infrastructure\p3'
 $script:Blockers = New-Object System.Collections.ArrayList
 $script:Failures = New-Object System.Collections.ArrayList
 $script:Warnings = New-Object System.Collections.ArrayList
@@ -99,6 +100,10 @@ $script:GitSnapshotBefore = $null
 $script:TestFrameworkProvenance = $null
 $script:CompatibilityAssessment = $null
 $script:ScenarioAssessment = $null
+$script:EffectiveScriptingBackend = $ScriptingBackend
+$script:StandaloneBuildReceiptAssessment = $null
+$script:PrebuiltIdentityAssessment = $null
+$script:PrebuiltTreeBefore = $null
 
 [Console]::OutputEncoding = $script:Utf8NoBom
 
@@ -128,6 +133,20 @@ function New-UpvrEmptyNUnitSummary {
     }
 }
 
+# Creates one empty process-control record used independently for Editor build and Player launch phases.
+function New-UpvrEmptyProcessControlEvidence {
+    return [ordered]@{
+        rootProcessId=$null; jobObjectCreated=$false; killOnJobCloseConfigured=$false
+        processAssignedToJob=$false; terminationRequested=$false; terminationReason=$null
+        terminationApiSucceeded=$null; rootProcessExited=$false; processTreeExitVerified=$false
+        activeProcessCountAfterWait=$null; treeExitWaitMilliseconds=0; timeoutPhase=$null
+        buildPhaseCompleted=$false; buildElapsedMilliseconds=0; runElapsedMilliseconds=0
+        observationCompleted=$false; responsiveObserved=$false; mainWindowHandle=0
+        closeMainWindowRequested=$false; closeMainWindowSucceeded=$false
+        failureSignalObserved=$false; exitCode=$null; processStarted=$false; controlError=$null
+    }
+}
+
 # Creates the versioned result shape with all P1-P3 public areas reserved.
 function New-UpvrResult {
     return [ordered]@{
@@ -141,7 +160,7 @@ function New-UpvrResult {
             buildRoot = $BuildRoot
             playerExecutable = $PlayerExecutable
             buildReceiptPath = $BuildReceiptPath
-            scriptingBackend = $ScriptingBackend
+            scriptingBackend = if ($Mode -eq 'PREBUILT_STANDALONE') { $null } else { $ScriptingBackend }
         }
         doctor = [ordered]@{
             sourcePath = $null; sha256 = $null; schemaVersion = $null; scannerVersion = $null
@@ -152,22 +171,28 @@ function New-UpvrResult {
             registryPath = $script:CompatibilityRegistryPath; registrySchemaVersion = $null
             verificationStatus = 'NOT_VERIFIED'; reason = 'Compatibility has not been verified.'
             unityVersion = $null; testFrameworkVersion = $null; testFrameworkSource = $null
-            target = 'StandaloneWindows64'; scriptingBackend = $ScriptingBackend
+            target = 'StandaloneWindows64'; scriptingBackend = if ($Mode -eq 'PREBUILT_STANDALONE') { $null } else { $ScriptingBackend }
             entryFound = $false; entryStatus = $null; minimumPhase = $null; allowedSourceKind = $null
             registryOrigin = $null; unityExecutableSha256 = $null; packageTreeSha256 = $null
             packageHashCanonicalization = $null; windowsModuleTreeSha256 = $null
-            moduleHashCanonicalization = $null; evidencePath = $null; approved = $false
+            moduleHashCanonicalization = $null; toolchainIdentitySha256 = $null
+            visualStudioVersion = $null; msvcVersion = $null; windowsSdkVersion = $null
+            evidencePath = $null; approved = $false
             provenance = [ordered]@{ accepted = $false; errors = @(); sourceEvidence = @() }
             postRunProvenance = [ordered]@{ accepted = $false; errors = @(); sourceEvidence = @() }
             packageIdentity = [ordered]@{ accepted = $false; errors = @(); treeSha256 = $null; expectedTreeSha256 = $null }
             windowsStandaloneModule = [ordered]@{
                 root = $null; exists = $false; fileCount = 0; totalBytes = 0; treeSha256 = $null
                 expectedTreeSha256 = $null; canonicalization = $null; monoAvailable = $false
-                il2cppAvailable = $false; identityMatched = $false; accepted = $false; error = $null
+                il2cppAvailable = $false; monoVariationPaths = @(); il2cppVariationPaths = @()
+                identityMatched = $false; accepted = $false; error = $null
             }
             toolchain = [ordered]@{
-                requested = $ScriptingBackend -eq 'IL2CPP'; visualStudioVersion = $null; msvcVersion = $null
-                windowsSdkVersion = $null; tools = @(); accepted = $false; errors = @()
+                requested = $Mode -ne 'PREBUILT_STANDALONE' -and $ScriptingBackend -eq 'IL2CPP'; visualStudioVersion = $null; msvcVersion = $null
+                windowsSdkVersion = $null; tools = @(); identitySha256 = $null
+                expectedVisualStudioVersion = $null; expectedMsvcVersion = $null
+                expectedWindowsSdkVersion = $null; expectedIdentitySha256 = $null
+                identityMatched = $false; accepted = $false; errors = @()
             }
         }
         unity = [ordered]@{
@@ -199,6 +224,8 @@ function New-UpvrResult {
             activeProcessCountAfterWait = $null; treeExitWaitMilliseconds = 0; timeoutPhase = $null
             buildPhaseCompleted = $false; buildElapsedMilliseconds = 0; runElapsedMilliseconds = 0
             failureSignalObserved = $false; controlError = $null
+            editorBuild = New-UpvrEmptyProcessControlEvidence
+            standaloneRun = New-UpvrEmptyProcessControlEvidence
         }
         isolation = [ordered]@{
             artifactsRoot = $null; sessionRoot = $null; projectCopyPath = $null; status = 'NOT_STARTED'
@@ -206,18 +233,20 @@ function New-UpvrResult {
             sourceFingerprint = $null; baseCopyFingerprint = $null; baseCopyMatched = $false
             infrastructureInjected = $false; infrastructurePath = $null; infrastructureTreeSha256 = $null
             scenarioOverlayPath = $null; scenarioOverlayTreeSha256 = $null
-            postOverlayFingerprint = $null; localPackageReferences = @()
+            postOverlayFingerprint = $null; localPackageReferences = @(); standaloneOverlayTreeSha256 = $null
         }
         build = [ordered]@{
             requested = $Mode -ne 'PREBUILT_STANDALONE'; kind = if ($Mode -match 'TEST_PLAYER$') { 'TEST_PLAYER' } else { 'STANDALONE' }
-            target = 'StandaloneWindows64'; scriptingBackend = $ScriptingBackend; executablePath = $null
+            target = 'StandaloneWindows64'; scriptingBackend = if ($Mode -eq 'PREBUILT_STANDALONE') { $null } else { $ScriptingBackend }; executablePath = $null
             executableExists = $false; executableSha256 = $null; dataDirectoryPath = $null; dataDirectoryExists = $false
             report = [ordered]@{ exists = $false; accepted = $false; errors = @() }
             tree = [ordered]@{ root = $null; canonicalization = $null; fileCount = 0; directoryCount = 0; totalBytes = 0; treeSha256 = $null; files = @() }
         }
         playerProcess = [ordered]@{
             observedProcessId = $null; runtimeReceiptCompleted = $false; crashObserved = $false
-            responsiveObservationSeconds = 0; closeMainWindowRequested = $false; exited = $false
+            responsiveObservationSeconds = 0; responsiveObserved = $false; observationCompleted = $false
+            closeMainWindowRequested = $false; closeMainWindowSucceeded = $false; exited = $false
+            exitCode = $null; timedOut = $false; elapsedMilliseconds = 0
         }
         nunit = [ordered]@{
             playerConnection = New-UpvrEmptyNUnitSummary
@@ -230,17 +259,17 @@ function New-UpvrResult {
             testRunnerObserved = $false; compilerErrors = @(); compilerErrorCount = 0
             failureMarkers = @(); missingRequiredMarkers = @(); classification = 'NOT_ANALYZED'
         }
-        playerLog = [ordered]@{ exists = $false; byteLength = $null; sha256 = $null; runStartedMarker = $false; runFinishedMarker = $false; crashMarkers = @(); classification = 'NOT_ANALYZED' }
+        playerLog = [ordered]@{ exists = $false; byteLength = $null; sha256 = $null; runStartedMarker = $false; runFinishedMarker = $false; standaloneStartedMarker = $false; standaloneFinishedMarker = $false; crashMarkers = @(); classification = 'NOT_ANALYZED' }
         scenario = [ordered]@{
             requested = $Mode -in @('SCENARIO_TEST_PLAYER', 'INSTRUMENTED_STANDALONE')
             schemaVersion = $null; scenarioId = $null; displayName = $null; bundlePath = $ScenarioBundlePath
-            bundleTreeSha256 = $null; expectedScenes = @(); expectedAssertionIds = @(); expectedCaptureIds = @()
+            kind = $null; bundleTreeSha256 = $null; buildScenes = @(); expectedScenes = @(); expectedAssertionIds = @(); expectedCaptureIds = @()
             timeoutSeconds = $null; graphicsRequired = $null; testFilter = $null; files = @()
             activeScene = $null; assertions = @(); result = $null; receiptAccepted = $false; receiptErrors = @()
         }
         captures = [ordered]@{ requestedIds = @(); artifacts = @(); allPresent = $false; contentJudged = $false }
-        buildReceipt = [ordered]@{ requestedPath = $BuildReceiptPath; exists = $false; accepted = $false; errors = @() }
-        prebuiltIdentity = [ordered]@{ buildRoot = $BuildRoot; executablePath = $PlayerExecutable; peValidated = $false; signatureStatus = $null; signerSubject = $null; treeSha256 = $null; accepted = $false; errors = @() }
+        buildReceipt = [ordered]@{ requestedPath = $BuildReceiptPath; resolvedPath = $null; exists = $false; sha256 = $null; accepted = $false; errors = @(); identity = $null }
+        prebuiltIdentity = [ordered]@{ buildRoot = $BuildRoot; executablePath = $PlayerExecutable; executableSha256 = $null; peValidated = $false; machine = $null; dataDirectoryPath = $null; dataDirectoryExists = $false; signatureStatus = $null; signerSubject = $null; treeSha256 = $null; beforeTreeSha256 = $null; afterTreeSha256 = $null; treeUnchanged = $null; accepted = $false; errors = @() }
         originalProjectIntegrity = [ordered]@{
             scope = 'PLAYER_COPY_SET'; status = 'NOT_VERIFIED'; beforeDirectoryCount = $null; afterDirectoryCount = $null
             beforeFileCount = $null; afterFileCount = $null; beforeTreeSha256 = $null; afterTreeSha256 = $null; unchanged = $null
@@ -268,7 +297,9 @@ function New-UpvrResult {
             unityStdoutPath = $null; unityStderrPath = $null; playerConnectionResultsPath = $null
             runtimeNUnitPath = $null; runtimeReceiptPath = $null; playerLogPath = $null
             buildReportPath = $null; buildTreePath = $null; scenarioReceiptPath = $null
-            scenarioContractPath = $null; screenshotRoot = $null; resultPath = $null; resultWritten = $false
+            scenarioContractPath = $null; standaloneBuildContractPath = $null; buildReceiptPath = $null
+            screenshotRoot = $null; playerStdoutPath = $null; playerStderrPath = $null
+            resultPath = $null; resultWritten = $false
         }
         verificationScopes = @(
             'scriptCompilation', 'windowsPlayerBuild', 'testPlayerExecution', 'playerConnection', 'playerTests',
@@ -329,6 +360,25 @@ function Add-UpvrWarning {
     [void]$script:Warnings.Add([ordered]@{ code = $Code; check = $Check; path = $Path; message = $Message })
 }
 
+# Copies the stable Job Object evidence fields into one public process-control record.
+function Set-UpvrProcessControlRecord {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Destination,
+        [Parameter(Mandatory = $true)][object]$Process
+    )
+
+    foreach ($property in @(
+        'rootProcessId','jobObjectCreated','killOnJobCloseConfigured','processAssignedToJob',
+        'terminationRequested','terminationReason','terminationApiSucceeded','rootProcessExited',
+        'processTreeExitVerified','activeProcessCountAfterWait','treeExitWaitMilliseconds','timeoutPhase',
+        'buildPhaseCompleted','buildElapsedMilliseconds','runElapsedMilliseconds','observationCompleted',
+        'responsiveObserved','mainWindowHandle','closeMainWindowRequested','closeMainWindowSucceeded',
+        'failureSignalObserved','exitCode','processStarted','controlError'
+    )) {
+        if ($Process.PSObject.Properties.Name -contains $property) { $Destination[$property] = $Process.$property }
+    }
+}
+
 # Writes one UTF-8 artifact without a byte-order mark or reparse traversal.
 function Write-UpvrText {
     param(
@@ -351,6 +401,12 @@ function Initialize-UpvrArtifactSession {
     if ($null -ne $script:NormalizedProjectRoot -and (Test-UpvPathWithinRoot -Path $root -Root $script:NormalizedProjectRoot)) {
         throw 'ArtifactsRoot must be outside the source Unity project.'
     }
+    if ($Mode -eq 'PREBUILT_STANDALONE' -and -not [string]::IsNullOrWhiteSpace($BuildRoot)) {
+        $normalizedBuildRoot = Get-UpvNormalizedPath -Path $BuildRoot
+        if ((Test-UpvPathWithinRoot -Path $root -Root $normalizedBuildRoot) -or $root.Equals($normalizedBuildRoot, $script:UpvPathComparison)) {
+            throw 'ArtifactsRoot must be outside the prebuilt build tree.'
+        }
+    }
     $reparse = Get-UpvReparsePointOnPath -Path $root
     if ($null -ne $reparse) { throw "ArtifactsRoot traverses reparse point $reparse." }
     if (Test-Path -LiteralPath $root -PathType Leaf) { throw 'ArtifactsRoot is an existing file.' }
@@ -363,8 +419,9 @@ function Initialize-UpvrArtifactSession {
     $script:Result.isolation.artifactsRoot = $root
     $script:Result.isolation.sessionRoot = $script:SessionRoot
     $script:Result.isolation.projectCopyPath = Join-Path $script:SessionRoot 'p'
-    $script:Result.build.executablePath = Join-Path $script:SessionRoot 'build\TestPlayer.exe'
-    $script:Result.build.dataDirectoryPath = Join-Path $script:SessionRoot 'build\TestPlayer_Data'
+    $buildExecutableName = if ($Mode -eq 'INSTRUMENTED_STANDALONE') { 'InstrumentedPlayer.exe' } elseif ($Mode -eq 'PREBUILT_STANDALONE') { [System.IO.Path]::GetFileName($PlayerExecutable) } else { 'TestPlayer.exe' }
+    $script:Result.build.executablePath = if ($Mode -eq 'PREBUILT_STANDALONE') { $PlayerExecutable } else { Join-Path $script:SessionRoot (Join-Path 'build' $buildExecutableName) }
+    $script:Result.build.dataDirectoryPath = if ($Mode -eq 'PREBUILT_STANDALONE') { Join-Path $BuildRoot (([System.IO.Path]::GetFileNameWithoutExtension($PlayerExecutable)) + '_Data') } else { Join-Path $script:SessionRoot (Join-Path 'build' (([System.IO.Path]::GetFileNameWithoutExtension($buildExecutableName)) + '_Data')) }
     $script:Result.artifacts.doctorResultPath = Join-Path $script:SessionRoot 'doctor.json'
     $script:Result.artifacts.doctorStderrPath = Join-Path $script:SessionRoot 'doctor-stderr.log'
     $script:Result.artifacts.editorLogPath = Join-Path $script:SessionRoot 'Editor.log'
@@ -379,7 +436,11 @@ function Initialize-UpvrArtifactSession {
     $script:Result.artifacts.buildTreePath = Join-Path $script:SessionRoot 'build-tree.json'
     $script:Result.artifacts.scenarioReceiptPath = Join-Path $script:SessionRoot 'scenario-result.json'
     $script:Result.artifacts.scenarioContractPath = Join-Path $script:SessionRoot 'scenario-contract.json'
+    $script:Result.artifacts.standaloneBuildContractPath = Join-Path $script:SessionRoot 'standalone-build-contract.json'
+    $script:Result.artifacts.buildReceiptPath = Join-Path $script:SessionRoot 'build-receipt.json'
     $script:Result.artifacts.screenshotRoot = Join-Path $script:SessionRoot 'screenshots'
+    $script:Result.artifacts.playerStdoutPath = Join-Path $script:SessionRoot 'player-stdout.log'
+    $script:Result.artifacts.playerStderrPath = Join-Path $script:SessionRoot 'player-stderr.log'
     $script:Result.artifacts.resultPath = Join-Path $script:SessionRoot 'result.json'
     Add-UpvrEvidence -Check 'artifactBoundary' -Status 'PASSED' -Source $script:SessionRoot -Detail 'All mutable project copies, builds, logs, receipts, and results are under one external non-reparse session.'
 }
@@ -505,6 +566,25 @@ function Set-UpvrCompatibilityBlocked {
     $script:Result.compatibility.reason = $Reason
 }
 
+# Resolves the effective Standalone backend before compatibility approval is evaluated.
+function Resolve-UpvrEffectiveScriptingBackend {
+    try {
+        $script:EffectiveScriptingBackend = if ($Mode -eq 'INSTRUMENTED_STANDALONE' -and $ScriptingBackend -ceq 'Project') {
+            $assessment = Get-UpvrProjectScriptingBackendAssessment -ProjectRoot $script:NormalizedProjectRoot
+            if (-not $assessment.accepted) { throw $assessment.error }
+            Add-UpvrEvidence -Check 'projectScriptingBackend' -Status 'PASSED' -Source $assessment.path -Detail "Serialized Standalone backend resolves to $($assessment.backend)."
+            [string]$assessment.backend
+        } else {
+            [string]$ScriptingBackend
+        }
+        $script:Result.compatibility.scriptingBackend = $script:EffectiveScriptingBackend
+        $script:Result.compatibility.toolchain.requested = $script:EffectiveScriptingBackend -ceq 'IL2CPP'
+    } catch {
+        Set-UpvrCompatibilityBlocked -Reason $_.Exception.Message
+        Add-UpvrBlocker -Code 'PROJECT_BACKEND_REJECTED' -Check 'scriptingBackend' -Path $script:NormalizedProjectRoot -Message $_.Exception.Message
+    }
+}
+
 # Verifies Test Framework provenance, exact signed Unity, and the Windows Support module.
 function Test-UpvrCompatibilityAndEditor {
     try {
@@ -525,16 +605,18 @@ function Test-UpvrCompatibilityAndEditor {
             -RegistryPath $script:CompatibilityRegistryPath `
             -UnityVersion $unityVersion `
             -TestFrameworkVersion ([string]$script:TestFrameworkProvenance.resolvedVersion) `
-            -ScriptingBackend $ScriptingBackend
+            -ScriptingBackend $script:EffectiveScriptingBackend
         foreach ($property in @(
             'registrySchemaVersion', 'target', 'scriptingBackend', 'entryFound', 'entryStatus', 'minimumPhase',
             'allowedSourceKind', 'registryOrigin', 'unityExecutableSha256', 'packageTreeSha256',
-            'packageHashCanonicalization', 'windowsModuleTreeSha256', 'moduleHashCanonicalization', 'evidencePath', 'approved'
+            'packageHashCanonicalization', 'windowsModuleTreeSha256', 'moduleHashCanonicalization',
+            'toolchainIdentitySha256', 'visualStudioVersion', 'msvcVersion', 'windowsSdkVersion',
+            'evidencePath', 'approved'
         )) {
             $script:Result.compatibility[$property] = $script:CompatibilityAssessment.$property
         }
         if (-not [string]::IsNullOrWhiteSpace([string]$script:CompatibilityAssessment.error)) { throw $script:CompatibilityAssessment.error }
-        if (-not $script:CompatibilityAssessment.entryFound) { throw "Unity $unityVersion, Test Framework $($script:TestFrameworkProvenance.resolvedVersion), StandaloneWindows64, and $ScriptingBackend are not registered." }
+        if (-not $script:CompatibilityAssessment.entryFound) { throw "Unity $unityVersion, Test Framework $($script:TestFrameworkProvenance.resolvedVersion), StandaloneWindows64, and $($script:EffectiveScriptingBackend) are not registered." }
         if (-not $script:CompatibilityAssessment.approved) { throw "The exact Player compatibility tuple is $($script:CompatibilityAssessment.entryStatus), not APPROVED." }
 
         $script:TestFrameworkProvenance = Get-UpvTestFrameworkProvenanceAssessment -ProjectRoot $script:NormalizedProjectRoot -AllowedSourceKinds ([string[]]@($script:CompatibilityAssessment.allowedSourceKind))
@@ -583,16 +665,41 @@ function Test-UpvrCompatibilityAndEditor {
         if ($script:Result.unity.executableSha256 -cne $script:CompatibilityAssessment.unityExecutableSha256) { throw 'Unity.exe hash does not match the compatibility entry.' }
 
         $module = Get-UpvrWindowsStandaloneModuleIdentity -UnityExecutablePath $path
-        foreach ($property in @('root', 'exists', 'fileCount', 'totalBytes', 'treeSha256', 'canonicalization', 'monoAvailable', 'il2cppAvailable', 'accepted', 'error')) {
+        foreach ($property in @('root', 'exists', 'fileCount', 'totalBytes', 'treeSha256', 'canonicalization', 'monoAvailable', 'il2cppAvailable', 'monoVariationPaths', 'il2cppVariationPaths', 'accepted', 'error')) {
             $script:Result.compatibility.windowsStandaloneModule[$property] = $module.$property
         }
         $script:Result.compatibility.windowsStandaloneModule.expectedTreeSha256 = $script:CompatibilityAssessment.windowsModuleTreeSha256
         $script:Result.compatibility.windowsStandaloneModule.identityMatched = $module.treeSha256 -ceq $script:CompatibilityAssessment.windowsModuleTreeSha256
         if (-not $module.accepted) { throw $module.error }
         if (-not $script:Result.compatibility.windowsStandaloneModule.identityMatched) { throw 'Windows Standalone Support module hash does not match the approved entry.' }
+        if ($script:EffectiveScriptingBackend -ceq 'Mono' -and -not $module.monoAvailable) { throw 'The approved Windows Standalone module lacks its Mono variation.' }
+        if ($script:EffectiveScriptingBackend -ceq 'IL2CPP' -and -not $module.il2cppAvailable) { throw 'The approved Unity installation lacks IL2CPP support.' }
+
+        if ($script:EffectiveScriptingBackend -ceq 'IL2CPP') {
+            $toolchain = Get-UpvrIl2CppToolchainIdentity
+            foreach ($property in @('visualStudioVersion','msvcVersion','windowsSdkVersion','tools','identitySha256','accepted','errors')) {
+                $script:Result.compatibility.toolchain[$property] = $toolchain.$property
+            }
+            if (-not $toolchain.accepted) { throw ([string]::Join(' ', [string[]]@($toolchain.errors))) }
+            $script:Result.compatibility.toolchain.expectedIdentitySha256 = $script:CompatibilityAssessment.toolchainIdentitySha256
+            $script:Result.compatibility.toolchain.expectedVisualStudioVersion = $script:CompatibilityAssessment.visualStudioVersion
+            $script:Result.compatibility.toolchain.expectedMsvcVersion = $script:CompatibilityAssessment.msvcVersion
+            $script:Result.compatibility.toolchain.expectedWindowsSdkVersion = $script:CompatibilityAssessment.windowsSdkVersion
+            $script:Result.compatibility.toolchain.identityMatched = `
+                [string]$toolchain.identitySha256 -ceq [string]$script:CompatibilityAssessment.toolchainIdentitySha256 -and `
+                [string]$toolchain.visualStudioVersion -ceq [string]$script:CompatibilityAssessment.visualStudioVersion -and `
+                [string]$toolchain.msvcVersion -ceq [string]$script:CompatibilityAssessment.msvcVersion -and `
+                [string]$toolchain.windowsSdkVersion -ceq [string]$script:CompatibilityAssessment.windowsSdkVersion
+            if (-not $script:Result.compatibility.toolchain.identityMatched) { throw 'IL2CPP toolchain identity does not match the approved compatibility entry.' }
+            Add-UpvrEvidence -Check 'il2cppToolchain' -Status 'PASSED' -Source $toolchain.visualStudioPath -Detail "IL2CPP toolchain identity SHA-256 $($toolchain.identitySha256) was captured."
+        } else {
+            $script:Result.compatibility.toolchain.accepted = $true
+            $script:Result.compatibility.toolchain.identityMatched = $true
+            $script:Result.compatibility.toolchain.errors = @()
+        }
 
         $script:Result.compatibility.reason = 'Signed Unity, Test Framework provenance, and Windows Standalone Support module are accepted; resolved package identity is pending.'
-        Add-UpvrEvidence -Check 'compatibilityPreflight' -Status 'PASSED' -Source $script:CompatibilityRegistryPath -Detail "Approved $unityVersion + Test Framework $($script:TestFrameworkProvenance.resolvedVersion) + StandaloneWindows64/$ScriptingBackend tuple selected."
+        Add-UpvrEvidence -Check 'compatibilityPreflight' -Status 'PASSED' -Source $script:CompatibilityRegistryPath -Detail "Approved $unityVersion + Test Framework $($script:TestFrameworkProvenance.resolvedVersion) + StandaloneWindows64/$($script:EffectiveScriptingBackend) tuple selected."
         Add-UpvrEvidence -Check 'windowsStandaloneModule' -Status 'PASSED' -Source $module.root -Detail "Module tree SHA-256 $($module.treeSha256) matches the registry."
     } catch {
         Set-UpvrCompatibilityBlocked -Reason $_.Exception.Message
@@ -692,6 +799,28 @@ function Initialize-UpvrPlayerScenarioBundle {
     }
 }
 
+# Validates one external source-only Standalone scenario before it reaches an isolated project.
+function Initialize-UpvrStandaloneScenarioBundle {
+    try {
+        $assessment = Get-UpvrStandaloneScenarioBundleAssessment -BundlePath $ScenarioBundlePath
+        if (-not $assessment.accepted) { throw ([string]::Join(' ', [string[]]@($assessment.errors))) }
+        if (Test-UpvPathWithinRoot -Path $assessment.root -Root $script:NormalizedProjectRoot) { throw 'ScenarioBundlePath must be outside the original Unity project.' }
+        if (Test-UpvPathWithinRoot -Path $assessment.root -Root $script:SessionRoot) { throw 'ScenarioBundlePath cannot be inside the mutable artifact session.' }
+        $script:ScenarioAssessment = $assessment
+        $script:Result.selection.scenarioId = $assessment.scenarioId
+        foreach ($property in @('schemaVersion','kind','scenarioId','displayName','timeoutSeconds','buildScenes','expectedScenes','expectedAssertionIds','expectedCaptureIds','graphicsRequired')) {
+            $script:Result.scenario[$property] = $assessment.$property
+        }
+        $script:Result.scenario.bundlePath = $assessment.root
+        $script:Result.scenario.bundleTreeSha256 = $assessment.treeSha256
+        $script:Result.scenario.files = @($assessment.files | ForEach-Object { [ordered]@{ path=$_.path; length=$_.length; sha256=$_.sha256 } })
+        $script:Result.captures.requestedIds = [string[]]@($assessment.expectedCaptureIds)
+        Add-UpvrEvidence -Check 'standaloneScenarioBundle' -Status 'PASSED' -Source $assessment.root -Detail "Source-only Standalone scenario $($assessment.scenarioId) has immutable tree SHA-256 $($assessment.treeSha256)."
+    } catch {
+        Add-UpvrBlocker -Code 'STANDALONE_SCENARIO_BUNDLE_REJECTED' -Check 'scenario' -Path $ScenarioBundlePath -Message $_.Exception.Message
+    }
+}
+
 # Injects the pinned Player scenario harness and reviewed bundle only into the isolated reservation.
 function Add-UpvrP2ScenarioOverlay {
     try {
@@ -727,6 +856,201 @@ function Add-UpvrP2ScenarioOverlay {
         Add-UpvrEvidence -Check 'scenarioOverlay' -Status 'PASSED' -Source $scenarioPath -Detail 'The reviewed bundle and pinned P2 harness were injected only after the base-copy fingerprint matched.'
     } catch {
         Add-UpvrBlocker -Code 'PLAYER_SCENARIO_OVERLAY_REJECTED' -Check 'scenario' -Path $ScenarioBundlePath -Message $_.Exception.Message
+    }
+}
+
+# Injects the pinned Standalone harness, builder, bootstrap, linker roots, and reviewed scenario into isolation.
+function Add-UpvrP3ScenarioOverlay {
+    try {
+        if ($null -eq $script:ScenarioAssessment) { throw 'No validated Standalone scenario bundle is available.' }
+        $reserved = Get-UpvrReservedInfrastructureAssessment -ProjectCopyPath $script:Result.isolation.projectCopyPath
+        if (-not $reserved.accepted) { throw $reserved.error }
+        $harness = Get-UpvrInfrastructureFingerprint -InfrastructureRoot (Join-Path $script:P2InfrastructureRoot 'Harness')
+        $standalone = Get-UpvrInfrastructureFingerprint -InfrastructureRoot $script:P3InfrastructureRoot
+        Copy-UpvrVerifiedInventory -Files $harness.files -DestinationRoot $reserved.path
+        Copy-UpvrVerifiedInventory -Files $standalone.files -DestinationRoot $reserved.path
+
+        $scenarioPath = Join-Path $reserved.path 'Scenario'
+        [void][System.IO.Directory]::CreateDirectory($scenarioPath)
+        Copy-UpvrVerifiedInventory -Files $script:ScenarioAssessment.files -DestinationRoot $scenarioPath
+        $copiedScenario = Get-UpvrStandaloneScenarioBundleAssessment -BundlePath $scenarioPath
+        if (-not $copiedScenario.accepted -or $copiedScenario.treeSha256 -cne $script:ScenarioAssessment.treeSha256) { throw 'Copied Standalone scenario overlay hash does not match the reviewed bundle.' }
+
+        $linkLines = New-Object System.Collections.Generic.List[string]
+        $linkLines.Add('<linker>')
+        foreach ($assemblyName in @('UnityPlayerVerification.Harness','UnityPlayerVerification.Standalone') + [string[]]@($script:ScenarioAssessment.assemblyNames)) {
+            $linkLines.Add(('  <assembly fullname="{0}" preserve="all" />' -f $assemblyName))
+        }
+        $linkLines.Add('</linker>')
+        Write-UpvrText -Path (Join-Path $reserved.path 'link.xml') -Content ([string]::Join([Environment]::NewLine, $linkLines.ToArray()))
+
+        $runtimeContract = [ordered]@{
+            schemaVersion='1.0.0'; sessionToken=$script:SessionToken; scenarioId=$script:ScenarioAssessment.scenarioId
+            displayName=$script:ScenarioAssessment.displayName; timeoutSeconds=[int]$script:ScenarioAssessment.timeoutSeconds
+            expectedScenes=[string[]]@($script:ScenarioAssessment.expectedScenes)
+            expectedAssertionIds=[string[]]@($script:ScenarioAssessment.expectedAssertionIds)
+            expectedCaptureIds=[string[]]@($script:ScenarioAssessment.expectedCaptureIds)
+            graphicsRequired=[bool]$script:ScenarioAssessment.graphicsRequired
+        }
+        Write-UpvrText -Path $script:Result.artifacts.scenarioContractPath -Content (ConvertTo-Json $runtimeContract -Depth 10 -Compress)
+
+        $overlay = Get-UpvrStableTreeSnapshot -Root $reserved.path -ExcludedRelativePrefixes @('Scenario')
+        $toolchainHash = if ($script:EffectiveScriptingBackend -ceq 'IL2CPP') { [string]$script:Result.compatibility.toolchain.identitySha256 } else { $null }
+        $buildContract = [ordered]@{
+            schemaVersion='1.0.0'; sessionToken=$script:SessionToken
+            originalFingerprint=[string]$script:OriginalFingerprintBefore.treeSha256
+            overlayTreeSha256=[string]$overlay.treeSha256
+            scenarioBundleTreeSha256=[string]$copiedScenario.treeSha256
+            windowsModuleTreeSha256=[string]$script:Result.compatibility.windowsStandaloneModule.treeSha256
+            toolchainIdentitySha256=$toolchainHash; requestedBackend=$ScriptingBackend
+            scenarioId=$script:ScenarioAssessment.scenarioId; displayName=$script:ScenarioAssessment.displayName
+            timeoutSeconds=[int]$script:ScenarioAssessment.timeoutSeconds
+            buildScenes=[string[]]@($script:ScenarioAssessment.buildScenes)
+            expectedScenes=[string[]]@($script:ScenarioAssessment.expectedScenes)
+            expectedAssertionIds=[string[]]@($script:ScenarioAssessment.expectedAssertionIds)
+            expectedCaptureIds=[string[]]@($script:ScenarioAssessment.expectedCaptureIds)
+            graphicsRequired=[bool]$script:ScenarioAssessment.graphicsRequired
+        }
+        Write-UpvrText -Path $script:Result.artifacts.standaloneBuildContractPath -Content (ConvertTo-Json $buildContract -Depth 10 -Compress)
+
+        $script:Result.isolation.infrastructureInjected = $true
+        $script:Result.isolation.infrastructurePath = $reserved.path
+        $script:Result.isolation.infrastructureTreeSha256 = $overlay.treeSha256
+        $script:Result.isolation.standaloneOverlayTreeSha256 = $overlay.treeSha256
+        $script:Result.isolation.scenarioOverlayPath = $scenarioPath
+        $script:Result.isolation.scenarioOverlayTreeSha256 = $copiedScenario.treeSha256
+        $script:Result.isolation.postOverlayFingerprint = (Get-StableUnityCopySetFingerprint -ProjectRoot $script:Result.isolation.projectCopyPath).treeSha256
+        $script:Result.isolation.status = 'STANDALONE_SCENARIO_INJECTED'
+        Add-UpvrEvidence -Check 'standaloneOverlay' -Status 'PASSED' -Source $reserved.path -Detail "Pinned P3 overlay SHA-256 $($overlay.treeSha256) and reviewed scenario SHA-256 $($copiedScenario.treeSha256) were injected only into isolation."
+    } catch {
+        Add-UpvrBlocker -Code 'STANDALONE_SCENARIO_OVERLAY_REJECTED' -Check 'scenario' -Path $ScenarioBundlePath -Message $_.Exception.Message
+    }
+}
+
+# Builds one isolated non-development instrumented Standalone with signed Unity inside a bounded Job Object.
+function Invoke-UpvrStandaloneEditorBuild {
+    $arguments = New-UpvrStandaloneBuildArguments `
+        -ProjectPath $script:Result.isolation.projectCopyPath `
+        -EditorLogPath $script:Result.artifacts.editorLogPath `
+        -UpmLogPath $script:Result.artifacts.upmLogPath
+    $script:Result.unity.arguments = $arguments
+    if ($arguments -contains $script:NormalizedProjectRoot) {
+        $script:Result.unity.commandLineContainsOriginalProject = $true
+        Add-UpvrBlocker -Code 'ORIGINAL_PROJECT_IN_UNITY_ARGUMENTS' -Check 'unityArguments' -Path $script:NormalizedProjectRoot -Message 'Unity build arguments contain the source project.'
+        return
+    }
+    $script:Result.unity.commandLineContainsOriginalProject = $false
+    foreach ($required in @('-batchmode','-forgetProjectPath','-executeMethod','-quit','-logFile','-upmLogFile')) {
+        if ($arguments -notcontains $required) { Add-UpvrBlocker -Code 'STANDALONE_BUILD_ARGUMENT_MISSING' -Check 'unityArguments' -Path $null -Message "Required Standalone build argument is missing: $required"; return }
+    }
+    foreach ($forbidden in @('-runTests','-nographics','-accept-apiupdate','-ignorecompilererrors')) {
+        if ($arguments -contains $forbidden) { Add-UpvrBlocker -Code 'FORBIDDEN_UNITY_ARGUMENT' -Check 'unityArguments' -Path $null -Message "Forbidden Standalone build argument is present: $forbidden"; return }
+    }
+
+    $environment = [ordered]@{
+        UPVR_SESSION_ROOT=$script:SessionRoot; UPVR_SESSION_TOKEN=$script:SessionToken
+        UPVR_BUILD_EXE_PATH=$script:Result.build.executablePath
+        UPVR_BUILD_REPORT_PATH=$script:Result.artifacts.buildReportPath
+        UPVR_BUILD_RECEIPT_PATH=$script:Result.artifacts.buildReceiptPath
+        UPVR_STANDALONE_BUILD_CONTRACT_PATH=$script:Result.artifacts.standaloneBuildContractPath
+    }
+    $previous = [ordered]@{}
+    foreach ($name in $environment.Keys) {
+        $previous[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+        [Environment]::SetEnvironmentVariable($name, [string]$environment[$name], 'Process')
+    }
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    try {
+        $process = Invoke-UnityProcessInJob `
+            -ExecutablePath $script:Result.unity.executablePath `
+            -Arguments $arguments `
+            -WorkingDirectory $script:SessionRoot `
+            -StandardOutputPath $script:Result.artifacts.unityStdoutPath `
+            -StandardErrorPath $script:Result.artifacts.unityStderrPath `
+            -TimeoutSeconds $BuildTimeoutSeconds `
+            -TreeExitGraceMilliseconds 15000
+    } finally {
+        $stopwatch.Stop()
+        foreach ($name in $environment.Keys) { [Environment]::SetEnvironmentVariable($name, $previous[$name], 'Process') }
+    }
+    $script:Result.unity.elapsedMilliseconds = [long]$stopwatch.ElapsedMilliseconds
+    $script:Result.unity.processStarted = [bool]$process.processStarted
+    $script:Result.unity.timedOut = [bool]$process.timedOut
+    $script:Result.unity.exitCode = $process.exitCode
+    $script:Result.timeouts.buildWithinLimit = -not $process.timedOut -and $stopwatch.Elapsed.TotalSeconds -le $BuildTimeoutSeconds
+    Set-UpvrProcessControlRecord -Destination $script:Result.processControl.editorBuild -Process $process
+    if ($process.processStarted) { Add-UpvrEvidence -Check 'standaloneEditorBuildProcess' -Status 'OBSERVED' -Source $script:Result.unity.executablePath -Detail 'Signed Unity built only the isolated instrumented Standalone project.' }
+    if (-not $process.jobObjectCreated -or -not $process.killOnJobCloseConfigured -or ($process.processStarted -and -not $process.processAssignedToJob)) {
+        Add-UpvrBlocker -Code 'STANDALONE_BUILD_JOB_CONTROL_FAILED' -Check 'processControl' -Path $script:Result.unity.executablePath -Message "Editor build Job Object setup failed: $($process.controlError)"
+    }
+    if ($process.timedOut) { Add-UpvrBlocker -Code 'STANDALONE_BUILD_TIMEOUT' -Check 'timeouts' -Path $script:Result.unity.executablePath -Message 'Instrumented Standalone build exceeded BuildTimeoutSeconds.' }
+    if ($process.processStarted -and -not $process.processTreeExitVerified) {
+        Add-UpvrBlocker -Code 'STANDALONE_BUILD_TREE_EXIT_UNPROVEN' -Check 'processControl' -Path $script:Result.unity.executablePath -Message 'Editor build Job Object accounting did not reach zero processes.'
+    } elseif ($process.processStarted) {
+        Add-UpvrEvidence -Check 'standaloneBuildProcessTree' -Status 'PASSED' -Source $script:Result.unity.executablePath -Detail 'Unity Editor build process accounting reached zero active Job Object processes.'
+    }
+}
+
+# Launches one exact Standalone executable under fixed arguments and bounded Job Object control.
+function Invoke-UpvrStandalonePlayer {
+    param([Parameter()][switch]$OpaqueObservation)
+
+    $arguments = New-UpvrStandalonePlayerArguments -PlayerLogPath $script:Result.artifacts.playerLogPath
+    $environment = [ordered]@{}
+    if (-not $OpaqueObservation) {
+        $environment = [ordered]@{
+            UPVR_SESSION_ROOT=$script:SessionRoot; UPVR_SESSION_TOKEN=$script:SessionToken
+            UPVR_SCENARIO_CONTRACT_PATH=$script:Result.artifacts.scenarioContractPath
+            UPVR_SCENARIO_RECEIPT_PATH=$script:Result.artifacts.scenarioReceiptPath
+            UPVR_SCREENSHOT_ROOT=$script:Result.artifacts.screenshotRoot
+        }
+    }
+    $previous = [ordered]@{}
+    foreach ($name in $environment.Keys) {
+        $previous[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+        [Environment]::SetEnvironmentVariable($name, [string]$environment[$name], 'Process')
+    }
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    try {
+        $invokeArguments = [ordered]@{
+            ExecutablePath=$script:Result.build.executablePath; Arguments=$arguments; WorkingDirectory=(Split-Path -Parent $script:Result.build.executablePath)
+            StandardOutputPath=$script:Result.artifacts.playerStdoutPath; StandardErrorPath=$script:Result.artifacts.playerStderrPath
+            TimeoutSeconds=$RunTimeoutSeconds; FailureSignalPath=$script:Result.artifacts.playerLogPath
+            FailureSignalPattern='(?i)(UPVR_ACCEPTANCE_PLAYER_CRASH|Crash!!!|Fatal Error!|UPVR_STANDALONE_RECEIPT_ERROR)'
+            TreeExitGraceMilliseconds=15000
+        }
+        if ($OpaqueObservation) {
+            $invokeArguments.ObservationSeconds = 10
+            $invokeArguments.CloseMainWindowAfterObservation = $true
+        }
+        $process = Invoke-UnityProcessInJob @invokeArguments
+    } finally {
+        $stopwatch.Stop()
+        foreach ($name in $environment.Keys) { [Environment]::SetEnvironmentVariable($name, $previous[$name], 'Process') }
+    }
+    Set-UpvrProcessControlRecord -Destination $script:Result.processControl.standaloneRun -Process $process
+    $script:Result.playerProcess.observedProcessId = $process.rootProcessId
+    $script:Result.playerProcess.responsiveObservationSeconds = if ($OpaqueObservation -and $process.observationCompleted) { 10 } else { 0 }
+    $script:Result.playerProcess.responsiveObserved = [bool]$process.responsiveObserved
+    $script:Result.playerProcess.observationCompleted = [bool]$process.observationCompleted
+    $script:Result.playerProcess.closeMainWindowRequested = [bool]$process.closeMainWindowRequested
+    $script:Result.playerProcess.closeMainWindowSucceeded = [bool]$process.closeMainWindowSucceeded
+    $script:Result.playerProcess.exited = [bool]$process.rootProcessExited
+    $script:Result.playerProcess.exitCode = $process.exitCode
+    $script:Result.playerProcess.timedOut = [bool]$process.timedOut
+    $script:Result.playerProcess.elapsedMilliseconds = [long]$stopwatch.ElapsedMilliseconds
+    $script:Result.timeouts.runWithinLimit = -not $process.timedOut -and $stopwatch.Elapsed.TotalSeconds -le $RunTimeoutSeconds
+    if ($Mode -eq 'INSTRUMENTED_STANDALONE') { $script:Result.timeouts.combinedWithinLimit = [bool]$script:Result.timeouts.buildWithinLimit -and [bool]$script:Result.timeouts.runWithinLimit }
+
+    if ($process.processStarted) { Add-UpvrEvidence -Check 'standalonePlayerProcess' -Status 'OBSERVED' -Source $script:Result.build.executablePath -Detail 'The exact Standalone executable started with only fixed verifier arguments.' }
+    if (-not $process.jobObjectCreated -or -not $process.killOnJobCloseConfigured -or ($process.processStarted -and -not $process.processAssignedToJob)) {
+        Add-UpvrBlocker -Code 'STANDALONE_PLAYER_JOB_CONTROL_FAILED' -Check 'processControl' -Path $script:Result.build.executablePath -Message "Standalone Player Job Object setup failed: $($process.controlError)"
+    }
+    if ($process.timedOut) { Add-UpvrBlocker -Code 'STANDALONE_PLAYER_TIMEOUT' -Check 'timeouts' -Path $script:Result.build.executablePath -Message 'Standalone Player exceeded RunTimeoutSeconds.' }
+    if ($process.processStarted -and -not $process.processTreeExitVerified) {
+        Add-UpvrBlocker -Code 'STANDALONE_PLAYER_TREE_EXIT_UNPROVEN' -Check 'processControl' -Path $script:Result.build.executablePath -Message 'Standalone Player Job Object accounting did not reach zero processes.'
+    } elseif ($process.processStarted) {
+        Add-UpvrEvidence -Check 'standalonePlayerProcessTree' -Status 'PASSED' -Source $script:Result.build.executablePath -Detail 'Standalone Player process accounting reached zero active Job Object processes.'
     }
 }
 
@@ -832,7 +1156,8 @@ function Invoke-UpvrUnityTestPlayer {
 # Verifies post-run Test Framework provenance and the exact resolved package tree.
 function Set-UpvrResolvedTestFrameworkIdentity {
     try {
-        if (-not $script:Result.unity.processStarted -or $script:Result.unity.timedOut -or -not $script:Result.processControl.processTreeExitVerified) {
+        $treeExitVerified = if ($Mode -eq 'INSTRUMENTED_STANDALONE') { [bool]$script:Result.processControl.editorBuild.processTreeExitVerified } else { [bool]$script:Result.processControl.processTreeExitVerified }
+        if (-not $script:Result.unity.processStarted -or $script:Result.unity.timedOut -or -not $treeExitVerified) {
             throw 'A completed Unity process tree is required before resolved package identity can be trusted.'
         }
         $post = Get-UpvTestFrameworkProvenanceAssessment -ProjectRoot $script:Result.isolation.projectCopyPath -AllowedSourceKinds ([string[]]@($script:CompatibilityAssessment.allowedSourceKind))
@@ -860,36 +1185,6 @@ function Set-UpvrResolvedTestFrameworkIdentity {
     }
 }
 
-# Parses retained Player log markers and concrete crash signatures.
-function Get-UpvrPlayerLogAnalysis {
-    param([Parameter(Mandatory = $true)][string]$Path)
-
-    $result = [ordered]@{
-        exists = $false; byteLength = $null; sha256 = $null; runStartedMarker = $false
-        runFinishedMarker = $false; crashMarkers = @(); classification = 'NOT_ANALYZED'
-    }
-    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return [pscustomobject]$result }
-    $item = Get-Item -LiteralPath $Path -Force
-    $text = [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8)
-    $result.exists = $true
-    $result.byteLength = [long]$item.Length
-    $result.sha256 = Get-UpvFileSha256 -Path $Path
-    $result.runStartedMarker = $text.Contains('UPVR_RUNTIME_RUN_STARTED')
-    $result.runFinishedMarker = $text.Contains('UPVR_RUNTIME_RUN_FINISHED')
-    $markers = New-Object System.Collections.ArrayList
-    foreach ($definition in @(
-        [pscustomobject]@{ code = 'PLAYER_CRASH'; pattern = '(?im)^Crash!!!\s*$' },
-        [pscustomobject]@{ code = 'PLAYER_FATAL_ERROR'; pattern = '(?i)Fatal Error!' },
-        [pscustomobject]@{ code = 'PLAYER_RECEIPT_ERROR'; pattern = 'UPVR_RUNTIME_RECEIPT_ERROR' },
-        [pscustomobject]@{ code = 'PLAYER_ACCEPTANCE_CRASH'; pattern = 'UPVR_ACCEPTANCE_PLAYER_CRASH' }
-    )) {
-        if ([regex]::IsMatch($text, $definition.pattern)) { [void]$markers.Add($definition.code) }
-    }
-    $result.crashMarkers = @($markers)
-    $result.classification = if ($markers.Count -gt 0) { 'FAILURE' } elseif ($result.runStartedMarker -and $result.runFinishedMarker) { 'SAFE' } else { 'INCONCLUSIVE' }
-    return [pscustomobject]$result
-}
-
 # Captures executable, Data directory, and full build-tree identity after every process exits.
 function Set-UpvrBuildTreeEvidence {
     try {
@@ -907,6 +1202,103 @@ function Set-UpvrBuildTreeEvidence {
         Add-UpvrEvidence -Check 'buildTree' -Status 'PASSED' -Source $script:Result.artifacts.buildTreePath -Detail "Test Player tree contains $($tree.fileCount) files with SHA-256 $($tree.treeSha256)."
     } catch {
         Add-UpvrBlocker -Code 'TEST_PLAYER_BUILD_TREE_REJECTED' -Check 'windowsPlayerBuild' -Path $script:Result.build.executablePath -Message $_.Exception.Message
+    }
+}
+
+# Cross-checks Editor compilation, BuildReport, build receipt, PE layout, and full Standalone tree identity.
+function Set-UpvrStandaloneBuildEvidence {
+    $editorLog = Get-UpvEditorLogAnalysis -Path $script:Result.artifacts.editorLogPath -ExpectedUnityVersion $script:Result.compatibility.unityVersion -ExpectedProjectPath $script:Result.isolation.projectCopyPath
+    foreach ($property in $editorLog.PSObject.Properties.Name) { if ($script:Result.editorLog.Contains($property)) { $script:Result.editorLog[$property] = $editorLog.$property } }
+
+    if ($editorLog.compilerErrorCount -gt 0) {
+        $script:Result.verification.scriptCompilation.status = 'VERIFIED_FAILURE'
+        $script:Result.verification.scriptCompilation.reason = "$($editorLog.compilerErrorCount) C# compiler error(s) were retained in Editor.log."
+        Add-UpvrFailure -Code 'STANDALONE_SCRIPT_COMPILATION_FAILED' -Check 'scriptCompilation' -Path $script:Result.artifacts.editorLogPath -Message $script:Result.verification.scriptCompilation.reason
+    } elseif ($editorLog.classification -eq 'SAFE') {
+        $script:Result.verification.scriptCompilation.status = 'VERIFIED_SUCCESS'
+        $script:Result.verification.scriptCompilation.reason = 'Signed Unity compiled the isolated Standalone overlay without retained compiler errors.'
+        Add-UpvrEvidence -Check 'standaloneScriptCompilation' -Status 'PASSED' -Source $script:Result.artifacts.editorLogPath -Detail $script:Result.verification.scriptCompilation.reason
+    } elseif ($editorLog.classification -eq 'FAILURE') {
+        $script:Result.verification.scriptCompilation.status = 'VERIFIED_FAILURE'
+        $script:Result.verification.scriptCompilation.reason = 'Editor.log contains a concrete compilation, package, crash, or batchmode failure marker.'
+        Add-UpvrFailure -Code 'STANDALONE_EDITOR_FAILURE' -Check 'scriptCompilation' -Path $script:Result.artifacts.editorLogPath -Message $script:Result.verification.scriptCompilation.reason
+    } else {
+        $script:Result.verification.scriptCompilation.status = 'BLOCKED'
+        $script:Result.verification.scriptCompilation.reason = 'Editor compilation evidence lacks required version, batchmode, or isolated-project markers.'
+        Add-UpvrBlocker -Code 'STANDALONE_EDITOR_LOG_INCOMPLETE' -Check 'scriptCompilation' -Path $script:Result.artifacts.editorLogPath -Message $script:Result.verification.scriptCompilation.reason
+    }
+
+    $report = Get-UpvrStandaloneBuildReportAssessment `
+        -Path $script:Result.artifacts.buildReportPath `
+        -ExpectedSessionToken $script:SessionToken `
+        -ExpectedExecutablePath $script:Result.build.executablePath `
+        -ExpectedBackend $script:EffectiveScriptingBackend
+    $script:Result.build.report = $report
+    if ($report.exists -and [int]$report.totalErrors -gt $report.buildErrors.Count -and $report.buildErrors.Count -eq 0 -and [string]$report.result -ceq 'Succeeded') {
+        Add-UpvrWarning -Code 'AMBIENT_EDITOR_ERRORS_OUTSIDE_BUILD_STEPS' -Check 'standaloneBuild' -Path $script:Result.artifacts.editorLogPath -Message "BuildSummary retained $($report.totalErrors) ambient Editor error count(s), while BuildReport steps contained no concrete errors and the build result succeeded."
+    }
+
+    try {
+        $script:PrebuiltIdentityAssessment = Get-UpvrPrebuiltIdentityAssessment -BuildRoot (Split-Path -Parent $script:Result.build.executablePath) -PlayerExecutable $script:Result.build.executablePath
+        $identity = $script:PrebuiltIdentityAssessment
+        $script:Result.build.executableExists = Test-Path -LiteralPath $script:Result.build.executablePath -PathType Leaf
+        $script:Result.build.dataDirectoryExists = Test-Path -LiteralPath $script:Result.build.dataDirectoryPath -PathType Container
+        if ($identity.accepted) {
+            $script:Result.build.executableSha256 = $identity.executableSha256
+            foreach ($property in @('root','canonicalization','fileCount','directoryCount','totalBytes','treeSha256','files')) { $script:Result.build.tree[$property] = $identity.tree.$property }
+            Write-UpvrText -Path $script:Result.artifacts.buildTreePath -Content (ConvertTo-Json $identity.tree -Depth 20)
+        }
+    } catch {
+        $script:PrebuiltIdentityAssessment = [pscustomobject][ordered]@{ accepted=$false; errors=@($_.Exception.Message); tree=$null }
+    }
+
+    $currentTree = if ($null -ne $script:PrebuiltIdentityAssessment -and $script:PrebuiltIdentityAssessment.accepted) { $script:PrebuiltIdentityAssessment.tree } else { [pscustomobject][ordered]@{ treeSha256=$null; fileCount=0; directoryCount=0; totalBytes=0 } }
+    $script:StandaloneBuildReceiptAssessment = Get-UpvrStandaloneBuildReceiptAssessment `
+        -Path $script:Result.artifacts.buildReceiptPath `
+        -ExpectedSessionToken $script:SessionToken `
+        -ExpectedBuildRoot (Split-Path -Parent $script:Result.build.executablePath) `
+        -ExpectedExecutablePath $script:Result.build.executablePath `
+        -ExpectedOriginalFingerprint $script:OriginalFingerprintBefore.treeSha256 `
+        -ExpectedOverlayTreeSha256 $script:Result.isolation.standaloneOverlayTreeSha256 `
+        -ExpectedScenarioBundleTreeSha256 $script:Result.isolation.scenarioOverlayTreeSha256 `
+        -ExpectedWindowsModuleTreeSha256 $script:Result.compatibility.windowsStandaloneModule.treeSha256 `
+        -ExpectedToolchainIdentitySha256 $(if ($script:EffectiveScriptingBackend -ceq 'IL2CPP') { $script:Result.compatibility.toolchain.identitySha256 } else { $null }) `
+        -ExpectedBackend $script:EffectiveScriptingBackend `
+        -CurrentTree $currentTree
+    $script:Result.buildReceipt.resolvedPath = $script:Result.artifacts.buildReceiptPath
+    $script:Result.buildReceipt.exists = [bool]$script:StandaloneBuildReceiptAssessment.exists
+    $script:Result.buildReceipt.sha256 = $script:StandaloneBuildReceiptAssessment.sha256
+    $script:Result.buildReceipt.accepted = [bool]$script:StandaloneBuildReceiptAssessment.accepted
+    $script:Result.buildReceipt.errors = @($script:StandaloneBuildReceiptAssessment.errors)
+    $script:Result.buildReceipt.identity = $script:StandaloneBuildReceiptAssessment
+    if ($script:StandaloneBuildReceiptAssessment.scriptingBackend -in @('Mono','IL2CPP')) {
+        $script:Result.build.scriptingBackend = [string]$script:StandaloneBuildReceiptAssessment.scriptingBackend
+    }
+
+    $concreteBuildFailure = $editorLog.classification -eq 'FAILURE' -or ($report.exists -and [string]$report.result -ne 'Succeeded')
+    if ($concreteBuildFailure) {
+        $script:Result.verification.windowsPlayerBuild.status = 'VERIFIED_FAILURE'
+        $script:Result.verification.windowsPlayerBuild.reason = 'Unity retained a concrete instrumented Standalone build failure.'
+        $script:Result.verification.standaloneBuild.status = 'VERIFIED_FAILURE'
+        $script:Result.verification.standaloneBuild.reason = $script:Result.verification.windowsPlayerBuild.reason
+        Add-UpvrFailure -Code 'INSTRUMENTED_STANDALONE_BUILD_FAILED' -Check 'standaloneBuild' -Path $script:Result.artifacts.buildReportPath -Message $script:Result.verification.standaloneBuild.reason
+    } elseif (
+        $report.accepted -and $script:StandaloneBuildReceiptAssessment.accepted -and
+        $script:PrebuiltIdentityAssessment.accepted -and $script:Result.unity.exitCode -eq 0 -and
+        $script:Result.processControl.editorBuild.processTreeExitVerified
+    ) {
+        $script:Result.verification.windowsPlayerBuild.status = 'VERIFIED_SUCCESS'
+        $script:Result.verification.windowsPlayerBuild.reason = 'BuildReport, PE layout, build receipt, and current full-tree identity agree.'
+        $script:Result.verification.standaloneBuild.status = 'VERIFIED_SUCCESS'
+        $script:Result.verification.standaloneBuild.reason = 'A non-development BuildOptions.None StandaloneWindows64 instrumented build was produced and identified.'
+        Add-UpvrEvidence -Check 'standaloneBuild' -Status 'PASSED' -Source $script:Result.artifacts.buildReceiptPath -Detail $script:Result.verification.standaloneBuild.reason
+    } else {
+        $script:Result.verification.windowsPlayerBuild.status = 'BLOCKED'
+        $script:Result.verification.windowsPlayerBuild.reason = 'Standalone build report, receipt, PE, tree, exit, or process evidence is incomplete or inconsistent.'
+        $script:Result.verification.standaloneBuild.status = 'BLOCKED'
+        $script:Result.verification.standaloneBuild.reason = $script:Result.verification.windowsPlayerBuild.reason
+        $messages = @($report.errors) + @($script:StandaloneBuildReceiptAssessment.errors) + @($script:PrebuiltIdentityAssessment.errors)
+        Add-UpvrBlocker -Code 'INSTRUMENTED_STANDALONE_BUILD_EVIDENCE_INCOMPLETE' -Check 'standaloneBuild' -Path $script:Result.artifacts.buildReceiptPath -Message ([string]::Join(' ', [string[]]$messages))
     }
 }
 
@@ -1132,6 +1524,218 @@ function Set-UpvrP2ScenarioVerificationEvidence {
     }
 }
 
+# Maps Standalone runtime receipt, log, exit, assertion, and PNG evidence to P3 verification scopes.
+function Set-UpvrStandaloneScenarioVerificationEvidence {
+    if ($null -eq $script:ScenarioAssessment) {
+        $script:Result.verification.scenarioBehavior.status = 'BLOCKED'
+        $script:Result.verification.scenarioBehavior.reason = 'The receipt-bound Standalone scenario contract is unavailable.'
+        Add-UpvrBlocker -Code 'STANDALONE_SCENARIO_CONTRACT_UNAVAILABLE' -Check 'scenarioBehavior' -Path $script:Result.artifacts.scenarioContractPath -Message $script:Result.verification.scenarioBehavior.reason
+        return
+    }
+
+    $script:Result.playerLog = Get-UpvrPlayerLogAnalysis -Path $script:Result.artifacts.playerLogPath
+    $receipt = Get-UpvrPlayerScenarioReceiptAssessment `
+        -Path $script:Result.artifacts.scenarioReceiptPath `
+        -Manifest $script:ScenarioAssessment `
+        -ExpectedSessionToken $script:SessionToken `
+        -ScreenshotRoot $script:Result.artifacts.screenshotRoot
+    $script:Result.playerProcess.runtimeReceiptCompleted = [bool]$receipt.runFinished
+    $script:Result.playerProcess.crashObserved = $script:Result.playerLog.classification -eq 'FAILURE'
+    $script:Result.scenario.receiptAccepted = [bool]$receipt.accepted
+    $script:Result.scenario.receiptErrors = @($receipt.errors)
+    $script:Result.scenario.activeScene = $receipt.activeScene
+    $script:Result.scenario.assertions = @($receipt.assertions)
+    $script:Result.scenario.result = $receipt.result
+    $script:Result.captures.artifacts = @($receipt.captures)
+    $script:Result.captures.allPresent = [bool]$receipt.capturesPresent
+    $script:Result.captures.contentJudged = $false
+
+    $crash = $script:Result.playerLog.classification -eq 'FAILURE' -or $script:Result.processControl.standaloneRun.failureSignalObserved
+    $timeout = $script:Result.playerProcess.timedOut -or [string]$receipt.exception -match '(?i)TimeoutException|timed out|timeout'
+    $expectedExit = if ([string]$receipt.result -ceq 'PASSED') { 0 } elseif ([string]$receipt.result -ceq 'FAILED') { 1 } else { $null }
+    $exitMatched = $null -ne $expectedExit -and $null -ne $script:Result.playerProcess.exitCode -and [long]$script:Result.playerProcess.exitCode -eq [long]$expectedExit
+
+    if ($crash) {
+        $script:Result.verification.standaloneLaunch.status = 'VERIFIED_FAILURE'
+        $script:Result.verification.standaloneLaunch.reason = 'Standalone Player log or Job Object monitoring retained a concrete crash/fatal marker.'
+        Add-UpvrFailure -Code 'STANDALONE_PLAYER_CRASHED' -Check 'standaloneLaunch' -Path $script:Result.artifacts.playerLogPath -Message $script:Result.verification.standaloneLaunch.reason
+    } elseif ($timeout) {
+        $script:Result.verification.standaloneLaunch.status = 'BLOCKED'
+        $script:Result.verification.standaloneLaunch.reason = 'Standalone Player or scenario exceeded its bounded timeout.'
+    } elseif ($receipt.exists -and $script:Result.playerLog.classification -eq 'SAFE' -and $exitMatched -and $script:Result.processControl.standaloneRun.processTreeExitVerified) {
+        $script:Result.verification.standaloneLaunch.status = 'VERIFIED_SUCCESS'
+        $script:Result.verification.standaloneLaunch.reason = 'Standalone runtime start/finish markers, receipt result, exit code, and process-tree completion agree.'
+        Add-UpvrEvidence -Check 'standaloneLaunch' -Status 'PASSED' -Source $script:Result.artifacts.playerLogPath -Detail $script:Result.verification.standaloneLaunch.reason
+    } else {
+        $script:Result.verification.standaloneLaunch.status = 'BLOCKED'
+        $script:Result.verification.standaloneLaunch.reason = 'Standalone launch receipt, runtime markers, exit code, or process-tree evidence is incomplete or inconsistent.'
+        Add-UpvrBlocker -Code 'STANDALONE_LAUNCH_EVIDENCE_INCOMPLETE' -Check 'standaloneLaunch' -Path $script:Result.artifacts.playerLogPath -Message $script:Result.verification.standaloneLaunch.reason
+    }
+
+    if ($crash) {
+        $script:Result.verification.scenarioBehavior.status = 'NOT_VERIFIED'
+        $script:Result.verification.scenarioBehavior.reason = 'The concrete Player crash prevented a complete scenario receipt.'
+    } elseif ($timeout) {
+        $script:Result.verification.scenarioBehavior.status = 'BLOCKED'
+        $script:Result.verification.scenarioBehavior.reason = 'The Standalone scenario did not complete within its bounded timeout.'
+        Add-UpvrBlocker -Code 'STANDALONE_SCENARIO_TIMEOUT' -Check 'scenarioBehavior' -Path $script:Result.artifacts.scenarioReceiptPath -Message $script:Result.verification.scenarioBehavior.reason
+    } elseif (-not $receipt.exists) {
+        $script:Result.verification.scenarioBehavior.status = 'BLOCKED'
+        $script:Result.verification.scenarioBehavior.reason = 'The Standalone scenario receipt is missing.'
+        Add-UpvrBlocker -Code 'STANDALONE_SCENARIO_RECEIPT_MISSING' -Check 'scenarioBehavior' -Path $script:Result.artifacts.scenarioReceiptPath -Message $script:Result.verification.scenarioBehavior.reason
+    } elseif (-not $receipt.captureIdsMatched -or -not $receipt.capturesPresent) {
+        $script:Result.verification.scenarioBehavior.status = 'BLOCKED'
+        $script:Result.verification.scenarioBehavior.reason = 'Requested Standalone capture IDs or files are missing or mismatched.'
+        Add-UpvrBlocker -Code 'STANDALONE_SCENARIO_CAPTURE_MISSING' -Check 'scenarioBehavior' -Path $script:Result.artifacts.screenshotRoot -Message $script:Result.verification.scenarioBehavior.reason
+    } elseif (-not $receipt.assertionIdsMatched -or -not $receipt.scenarioIdMatched -or -not $receipt.sceneMatched -or -not $receipt.runFinished) {
+        $script:Result.verification.scenarioBehavior.status = 'BLOCKED'
+        $script:Result.verification.scenarioBehavior.reason = 'Standalone receipt identity, Scene, completion, or assertion IDs do not exactly match the manifest.'
+        Add-UpvrBlocker -Code 'STANDALONE_SCENARIO_RECEIPT_MISMATCH' -Check 'scenarioBehavior' -Path $script:Result.artifacts.scenarioReceiptPath -Message ([string]::Join(' ', [string[]]@($receipt.errors)))
+    } elseif (-not $receipt.assertionsPassed -or [string]$receipt.result -cne 'PASSED') {
+        $script:Result.verification.scenarioBehavior.status = 'VERIFIED_FAILURE'
+        $script:Result.verification.scenarioBehavior.reason = 'One or more manifest-owned Standalone scenario assertions failed.'
+        Add-UpvrFailure -Code 'STANDALONE_SCENARIO_ASSERTION_FAILED' -Check 'scenarioBehavior' -Path $script:Result.artifacts.scenarioReceiptPath -Message $script:Result.verification.scenarioBehavior.reason
+    } elseif ($receipt.accepted) {
+        $script:Result.verification.scenarioBehavior.status = 'VERIFIED_SUCCESS'
+        $script:Result.verification.scenarioBehavior.reason = 'Scenario ID, active Scene, assertions, captures, and completion receipt exactly match the reviewed Standalone manifest.'
+        Add-UpvrEvidence -Check 'standaloneScenarioBehavior' -Status 'PASSED' -Source $script:Result.artifacts.scenarioReceiptPath -Detail $script:Result.verification.scenarioBehavior.reason
+    } else {
+        $script:Result.verification.scenarioBehavior.status = 'BLOCKED'
+        $script:Result.verification.scenarioBehavior.reason = 'Standalone scenario evidence is incomplete or internally inconsistent.'
+        Add-UpvrBlocker -Code 'STANDALONE_SCENARIO_EVIDENCE_INCOMPLETE' -Check 'scenarioBehavior' -Path $script:Result.artifacts.scenarioReceiptPath -Message ([string]::Join(' ', [string[]]@($receipt.errors)))
+    }
+
+    if ($crash) {
+        $script:Result.verification.visualEvidence.status = 'NOT_VERIFIED'
+        $script:Result.verification.visualEvidence.reason = 'The Player crash prevented complete capture evidence.'
+    } elseif ($timeout) {
+        $script:Result.verification.visualEvidence.status = 'BLOCKED'
+        $script:Result.verification.visualEvidence.reason = 'The scenario timeout prevents complete capture evidence.'
+    } elseif (-not $receipt.captureIdsMatched -or -not $receipt.capturesPresent) {
+        $script:Result.verification.visualEvidence.status = 'BLOCKED'
+        $script:Result.verification.visualEvidence.reason = 'Requested Standalone PNG IDs or file identities are missing or mismatched.'
+    } else {
+        $script:Result.verification.visualEvidence.status = 'VERIFIED_SUCCESS'
+        $script:Result.verification.visualEvidence.reason = if ($script:ScenarioAssessment.expectedCaptureIds.Count -eq 0) { 'The manifest requested no captures and no unexpected capture IDs were emitted.' } else { 'Every requested PNG exists with matching nonzero length and SHA-256; image content was not judged.' }
+        Add-UpvrEvidence -Check 'standaloneVisualEvidence' -Status 'PASSED' -Source $script:Result.artifacts.screenshotRoot -Detail $script:Result.verification.visualEvidence.reason
+    }
+}
+
+# Validates one explicit prebuilt Player and optionally binds its retained build receipt to a fresh runtime contract.
+function Initialize-UpvrPrebuiltStandalone {
+    try {
+        $script:PrebuiltIdentityAssessment = Get-UpvrPrebuiltIdentityAssessment -BuildRoot $BuildRoot -PlayerExecutable $PlayerExecutable
+        $identity = $script:PrebuiltIdentityAssessment
+        foreach ($property in @('buildRoot','executablePath','executableSha256','peValidated','machine','dataDirectoryPath','dataDirectoryExists','signatureStatus','signerSubject','accepted','errors')) {
+            $script:Result.prebuiltIdentity[$property] = $identity.$property
+        }
+        if (-not $identity.accepted) { throw ([string]::Join(' ', [string[]]@($identity.errors))) }
+        $script:PrebuiltTreeBefore = $identity.tree
+        $script:Result.prebuiltIdentity.treeSha256 = $identity.tree.treeSha256
+        $script:Result.prebuiltIdentity.beforeTreeSha256 = $identity.tree.treeSha256
+        $script:Result.build.executablePath = $identity.executablePath
+        $script:Result.build.executableExists = $true
+        $script:Result.build.executableSha256 = $identity.executableSha256
+        $script:Result.build.dataDirectoryPath = $identity.dataDirectoryPath
+        $script:Result.build.dataDirectoryExists = $identity.dataDirectoryExists
+        foreach ($property in @('root','canonicalization','fileCount','directoryCount','totalBytes','treeSha256','files')) { $script:Result.build.tree[$property] = $identity.tree.$property }
+        Write-UpvrText -Path $script:Result.artifacts.buildTreePath -Content (ConvertTo-Json $identity.tree -Depth 20)
+        $script:Result.verification.prebuiltIdentity.status = 'VERIFIED_SUCCESS'
+        $script:Result.verification.prebuiltIdentity.reason = 'The explicit prebuilt EXE is PE32+ AMD64, has its matching Data directory, and has a deterministic full-tree identity.'
+        Add-UpvrEvidence -Check 'prebuiltIdentity' -Status 'PASSED' -Source $identity.executablePath -Detail $script:Result.verification.prebuiltIdentity.reason
+
+        if ([string]::IsNullOrWhiteSpace($BuildReceiptPath)) { return }
+        $receiptPath = Get-UpvNormalizedPath -Path $BuildReceiptPath
+        $script:Result.buildReceipt.resolvedPath = $receiptPath
+        $script:StandaloneBuildReceiptAssessment = Get-UpvrStandaloneBuildReceiptAssessment `
+            -Path $receiptPath -ExpectedBuildRoot $identity.buildRoot -ExpectedExecutablePath $identity.executablePath `
+            -ExpectedBackend 'Project' -CurrentTree $identity.tree
+        $script:Result.buildReceipt.exists = [bool]$script:StandaloneBuildReceiptAssessment.exists
+        $script:Result.buildReceipt.sha256 = $script:StandaloneBuildReceiptAssessment.sha256
+        $script:Result.buildReceipt.accepted = [bool]$script:StandaloneBuildReceiptAssessment.accepted
+        $script:Result.buildReceipt.errors = @($script:StandaloneBuildReceiptAssessment.errors)
+        $script:Result.buildReceipt.identity = $script:StandaloneBuildReceiptAssessment
+        if (-not $script:StandaloneBuildReceiptAssessment.accepted) { throw ([string]::Join(' ', [string[]]@($script:StandaloneBuildReceiptAssessment.errors))) }
+
+        $scenario = $script:StandaloneBuildReceiptAssessment.scenario
+        $script:ScenarioAssessment = [pscustomobject][ordered]@{
+            accepted=$true; schemaVersion='1.0.0'; kind='STANDALONE_SCENARIO_BUNDLE'
+            scenarioId=[string]$scenario.scenarioId; displayName=[string]$scenario.displayName
+            timeoutSeconds=[int]$scenario.timeoutSeconds; buildScenes=[string[]]@($scenario.buildScenes)
+            expectedScenes=[string[]]@($scenario.expectedScenes)
+            expectedAssertionIds=[string[]]@($scenario.expectedAssertionIds)
+            expectedCaptureIds=[string[]]@($scenario.expectedCaptureIds)
+            graphicsRequired=[bool]$scenario.graphicsRequired
+            treeSha256=[string]$script:StandaloneBuildReceiptAssessment.scenarioBundleTreeSha256
+        }
+        $script:Result.scenario.requested = $true
+        foreach ($property in @('schemaVersion','kind','scenarioId','displayName','timeoutSeconds','buildScenes','expectedScenes','expectedAssertionIds','expectedCaptureIds','graphicsRequired')) { $script:Result.scenario[$property] = $script:ScenarioAssessment.$property }
+        $script:Result.scenario.bundleTreeSha256 = $script:ScenarioAssessment.treeSha256
+        $script:Result.selection.scenarioId = $script:ScenarioAssessment.scenarioId
+        $script:Result.captures.requestedIds = [string[]]@($script:ScenarioAssessment.expectedCaptureIds)
+        $script:Result.build.scriptingBackend = [string]$script:StandaloneBuildReceiptAssessment.scriptingBackend
+        $script:Result.input.scriptingBackend = [string]$script:StandaloneBuildReceiptAssessment.scriptingBackend
+
+        $runtimeContract = [ordered]@{
+            schemaVersion='1.0.0'; sessionToken=$script:SessionToken; scenarioId=$script:ScenarioAssessment.scenarioId
+            displayName=$script:ScenarioAssessment.displayName; timeoutSeconds=$script:ScenarioAssessment.timeoutSeconds
+            expectedScenes=[string[]]@($script:ScenarioAssessment.expectedScenes)
+            expectedAssertionIds=[string[]]@($script:ScenarioAssessment.expectedAssertionIds)
+            expectedCaptureIds=[string[]]@($script:ScenarioAssessment.expectedCaptureIds)
+            graphicsRequired=[bool]$script:ScenarioAssessment.graphicsRequired
+        }
+        Write-UpvrText -Path $script:Result.artifacts.scenarioContractPath -Content (ConvertTo-Json $runtimeContract -Depth 10 -Compress)
+        Add-UpvrEvidence -Check 'prebuiltBuildReceipt' -Status 'PASSED' -Source $receiptPath -Detail 'The retained build receipt exactly matches the explicit EXE and current full build tree.'
+    } catch {
+        if ($script:Result.verification.prebuiltIdentity.status -ne 'VERIFIED_SUCCESS') {
+            $script:Result.verification.prebuiltIdentity.status = 'BLOCKED'
+            $script:Result.verification.prebuiltIdentity.reason = 'The explicit prebuilt Player identity is invalid or incomplete.'
+        }
+        Add-UpvrBlocker -Code 'PREBUILT_STANDALONE_REJECTED' -Check 'prebuiltIdentity' -Path $PlayerExecutable -Message $_.Exception.Message
+    }
+}
+
+# Recomputes the prebuilt full-tree identity after execution and blocks any runtime mutation.
+function Complete-UpvrPrebuiltTreeIntegrity {
+    if ($null -eq $script:PrebuiltTreeBefore -or [string]::IsNullOrWhiteSpace([string]$script:Result.prebuiltIdentity.buildRoot)) { return }
+    try {
+        $after = Get-UpvrStableTreeSnapshot -Root $script:Result.prebuiltIdentity.buildRoot
+        $unchanged = [string]$after.treeSha256 -ceq [string]$script:PrebuiltTreeBefore.treeSha256
+        $script:Result.prebuiltIdentity.afterTreeSha256 = $after.treeSha256
+        $script:Result.prebuiltIdentity.treeUnchanged = $unchanged
+        if (-not $unchanged) { Add-UpvrBlocker -Code 'PREBUILT_BUILD_TREE_CHANGED' -Check 'prebuiltIdentity' -Path $script:Result.prebuiltIdentity.buildRoot -Message 'The prebuilt build tree changed while the Player was executed.' }
+        else { Add-UpvrEvidence -Check 'prebuiltTreeIntegrity' -Status 'UNCHANGED' -Source $script:Result.prebuiltIdentity.buildRoot -Detail 'The prebuilt full-tree hash is unchanged after execution.' }
+    } catch {
+        Add-UpvrBlocker -Code 'PREBUILT_TREE_INTEGRITY_UNPROVEN' -Check 'prebuiltIdentity' -Path $script:Result.prebuiltIdentity.buildRoot -Message $_.Exception.Message
+    }
+}
+
+# Classifies opaque prebuilt launch-only evidence without promoting it to behavioral verification.
+function Set-UpvrOpaqueLaunchEvidence {
+    $script:Result.playerLog = Get-UpvrPlayerLogAnalysis -Path $script:Result.artifacts.playerLogPath
+    $crash = $script:Result.playerLog.classification -eq 'FAILURE' -or $script:Result.processControl.standaloneRun.failureSignalObserved
+    if ($crash) {
+        $script:Result.playerProcess.crashObserved = $true
+        $script:Result.verification.standaloneLaunch.status = 'VERIFIED_FAILURE'
+        $script:Result.verification.standaloneLaunch.reason = 'The opaque prebuilt Player retained a concrete crash or fatal marker.'
+        Add-UpvrFailure -Code 'OPAQUE_PREBUILT_CRASHED' -Check 'standaloneLaunch' -Path $script:Result.artifacts.playerLogPath -Message $script:Result.verification.standaloneLaunch.reason
+    } elseif ($script:Result.playerProcess.timedOut) {
+        $script:Result.verification.standaloneLaunch.status = 'BLOCKED'
+        $script:Result.verification.standaloneLaunch.reason = 'The opaque prebuilt Player exceeded RunTimeoutSeconds before completing the observation.'
+    } elseif (
+        $script:Result.playerProcess.observationCompleted -and $script:Result.playerProcess.responsiveObserved -and
+        $script:Result.playerProcess.closeMainWindowRequested -and $script:Result.processControl.standaloneRun.processTreeExitVerified
+    ) {
+        $script:Result.verification.standaloneLaunch.status = 'VERIFIED_SUCCESS'
+        $script:Result.verification.standaloneLaunch.reason = 'The exact opaque EXE exposed a responsive window continuously for at least 10 seconds and its Job Object reached zero processes after CloseMainWindow was requested.'
+        Add-UpvrEvidence -Check 'opaqueStandaloneLaunch' -Status 'PASSED' -Source $script:Result.build.executablePath -Detail $script:Result.verification.standaloneLaunch.reason
+    } else {
+        $script:Result.verification.standaloneLaunch.status = 'BLOCKED'
+        $script:Result.verification.standaloneLaunch.reason = 'The opaque EXE exited early or lacked a responsive 10-second window/process-tree observation.'
+        Add-UpvrBlocker -Code 'OPAQUE_LAUNCH_EVIDENCE_INCOMPLETE' -Check 'standaloneLaunch' -Path $script:Result.build.executablePath -Message $script:Result.verification.standaloneLaunch.reason
+    }
+}
+
 # Recomputes source content and Git metadata after all dynamic work completes.
 function Complete-UpvrOriginalIntegrity {
     if ($null -ne $script:OriginalFingerprintBefore) {
@@ -1170,17 +1774,26 @@ function Complete-UpvrResult {
         @('scriptCompilation', 'windowsPlayerBuild', 'testPlayerExecution', 'playerConnection', 'playerTests')
     } elseif ($Mode -eq 'SCENARIO_TEST_PLAYER') {
         @('scriptCompilation', 'windowsPlayerBuild', 'testPlayerExecution', 'playerConnection', 'playerTests', 'scenarioBehavior', 'visualEvidence')
+    } elseif ($Mode -eq 'INSTRUMENTED_STANDALONE') {
+        @('scriptCompilation', 'standaloneBuild', 'standaloneLaunch', 'scenarioBehavior', 'visualEvidence')
+    } elseif ($Mode -eq 'PREBUILT_STANDALONE' -and -not [string]::IsNullOrWhiteSpace($BuildReceiptPath)) {
+        @('prebuiltIdentity', 'standaloneLaunch', 'scenarioBehavior', 'visualEvidence')
+    } elseif ($Mode -eq 'PREBUILT_STANDALONE') {
+        @('prebuiltIdentity', 'standaloneLaunch')
     } else {
         @()
     }
     $scopeStatuses = [string[]]@($requiredScopes | ForEach-Object { [string]$script:Result.verification[$_].status })
-    $script:Result.finalStatus = Get-UpvrFinalStatusAssessment `
-        -OriginalIntegrityStatus ([string]$script:Result.originalProjectIntegrity.status) `
-        -GitIntegrityStatus ([string]$script:Result.gitMetadataIntegrity.status) `
-        -BlockerCount $script:Blockers.Count `
-        -FailureCount $script:Failures.Count `
-        -CompatibilityStatus ([string]$script:Result.compatibility.verificationStatus) `
-        -RequiredScopeStatuses $scopeStatuses
+    $finalArguments = [ordered]@{
+        OriginalIntegrityStatus=[string]$script:Result.originalProjectIntegrity.status
+        GitIntegrityStatus=[string]$script:Result.gitMetadataIntegrity.status
+        BlockerCount=$script:Blockers.Count; FailureCount=$script:Failures.Count
+        CompatibilityStatus=[string]$script:Result.compatibility.verificationStatus
+        RequiredScopeStatuses=$scopeStatuses
+    }
+    if ($Mode -eq 'PREBUILT_STANDALONE') { $finalArguments.CompatibilityNotRequired = $true }
+    if ($Mode -eq 'PREBUILT_STANDALONE' -and [string]::IsNullOrWhiteSpace($BuildReceiptPath)) { $finalArguments.LaunchOnly = $true }
+    $script:Result.finalStatus = Get-UpvrFinalStatusAssessment @finalArguments
     if ($script:Result.finalStatus -eq 'VERIFICATION_BLOCKED' -and $script:Blockers.Count -eq 0) {
         Add-UpvrBlocker -Code 'REQUIRED_SCOPE_NOT_VERIFIED' -Check 'finalStatus' -Path $null -Message 'One or more required Player verification scopes lack positive evidence.'
     }
@@ -1209,9 +1822,6 @@ function Write-UpvrResult {
 }
 
 try {
-    if ($Mode -notin @('TEST_PLAYER', 'SCENARIO_TEST_PLAYER')) {
-        Add-UpvrBlocker -Code 'MODE_NOT_AVAILABLE_IN_COMPONENT_VERSION' -Check 'mode' -Path $null -Message "Mode $Mode is reserved but is not available in component $($script:ComponentVersion)."
-    }
     if ($Mode -in @('TEST_PLAYER', 'SCENARIO_TEST_PLAYER') -and $ScriptingBackend -cne 'Mono') {
         Add-UpvrBlocker -Code 'P1_P2_BACKEND_REJECTED' -Check 'scriptingBackend' -Path $null -Message 'Test Player modes are sealed to Mono through P2.'
     }
@@ -1220,55 +1830,101 @@ try {
         if (-not $assessment.accepted) { Add-UpvrBlocker -Code 'TEST_SELECTOR_REJECTED' -Check 'selection' -Path $null -Message $assessment.error }
     }
     $selectorSupplied = -not [string]::IsNullOrWhiteSpace($TestFilter) -or -not [string]::IsNullOrWhiteSpace($TestCategory) -or -not [string]::IsNullOrWhiteSpace($AssemblyNames)
-    if ($Mode -eq 'SCENARIO_TEST_PLAYER' -and $selectorSupplied) { Add-UpvrBlocker -Code 'SCENARIO_SELECTOR_CONFLICT' -Check 'selection' -Path $null -Message 'ScenarioBundlePath and test selection parameters cannot be combined; the manifest owns the fixed harness filter.' }
-    if ($Mode -eq 'SCENARIO_TEST_PLAYER' -and [string]::IsNullOrWhiteSpace($ScenarioBundlePath)) { Add-UpvrBlocker -Code 'SCENARIO_BUNDLE_REQUIRED' -Check 'selection' -Path $null -Message 'SCENARIO_TEST_PLAYER requires ScenarioBundlePath.' }
+    if ($Mode -in @('SCENARIO_TEST_PLAYER','INSTRUMENTED_STANDALONE') -and $selectorSupplied) { Add-UpvrBlocker -Code 'SCENARIO_SELECTOR_CONFLICT' -Check 'selection' -Path $null -Message 'Scenario modes cannot be combined with test selection parameters; the manifest owns its execution contract.' }
+    if ($Mode -in @('SCENARIO_TEST_PLAYER','INSTRUMENTED_STANDALONE') -and [string]::IsNullOrWhiteSpace($ScenarioBundlePath)) { Add-UpvrBlocker -Code 'SCENARIO_BUNDLE_REQUIRED' -Check 'selection' -Path $null -Message "$Mode requires ScenarioBundlePath." }
     if ($Mode -eq 'TEST_PLAYER' -and -not [string]::IsNullOrWhiteSpace($ScenarioBundlePath)) { Add-UpvrBlocker -Code 'TEST_PLAYER_SCENARIO_CONFLICT' -Check 'selection' -Path $ScenarioBundlePath -Message 'TEST_PLAYER cannot be combined with ScenarioBundlePath.' }
-    if (-not [string]::IsNullOrWhiteSpace($BuildRoot) -or -not [string]::IsNullOrWhiteSpace($PlayerExecutable) -or -not [string]::IsNullOrWhiteSpace($BuildReceiptPath)) {
+    if ($Mode -ne 'PREBUILT_STANDALONE' -and (-not [string]::IsNullOrWhiteSpace($BuildRoot) -or -not [string]::IsNullOrWhiteSpace($PlayerExecutable) -or -not [string]::IsNullOrWhiteSpace($BuildReceiptPath))) {
         Add-UpvrBlocker -Code 'PROJECT_PREBUILT_INPUT_CONFLICT' -Check 'input' -Path $null -Message 'Project modes cannot be combined with prebuilt inputs.'
     }
+    if ($Mode -eq 'PREBUILT_STANDALONE') {
+        if ($selectorSupplied -or -not [string]::IsNullOrWhiteSpace($ScenarioBundlePath)) { Add-UpvrBlocker -Code 'PREBUILT_SELECTION_CONFLICT' -Check 'selection' -Path $null -Message 'PREBUILT_STANDALONE cannot receive source scenario or test selection parameters.' }
+        if ([string]::IsNullOrWhiteSpace($BuildRoot) -or [string]::IsNullOrWhiteSpace($PlayerExecutable)) { Add-UpvrBlocker -Code 'PREBUILT_INPUT_REQUIRED' -Check 'input' -Path $null -Message 'PREBUILT_STANDALONE requires explicit BuildRoot and PlayerExecutable.' }
+        if ($PSBoundParameters.ContainsKey('ProjectRoot')) { Add-UpvrBlocker -Code 'PREBUILT_PROJECT_INPUT_CONFLICT' -Check 'input' -Path $ProjectRoot -Message 'PREBUILT_STANDALONE cannot receive ProjectRoot.' }
+        if ($PSBoundParameters.ContainsKey('ScriptingBackend')) { Add-UpvrBlocker -Code 'PREBUILT_BACKEND_INPUT_CONFLICT' -Check 'input' -Path $null -Message 'PREBUILT_STANDALONE derives backend identity only from a matching build receipt.' }
+        if (-not [string]::IsNullOrWhiteSpace($UnityExecutable)) { Add-UpvrBlocker -Code 'PREBUILT_UNITY_INPUT_CONFLICT' -Check 'input' -Path $UnityExecutable -Message 'PREBUILT_STANDALONE does not accept or start UnityExecutable.' }
+        if ([string]::IsNullOrWhiteSpace($BuildReceiptPath) -and $RunTimeoutSeconds -lt 10) { Add-UpvrBlocker -Code 'OPAQUE_OBSERVATION_TIMEOUT_TOO_SHORT' -Check 'timeouts' -Path $null -Message 'Opaque prebuilt observation requires RunTimeoutSeconds of at least 10.' }
+    }
 
-    try {
-        $script:NormalizedProjectRoot = Get-UpvNormalizedPath -Path $ProjectRoot
-        $script:Result.input.projectRoot = $script:NormalizedProjectRoot
-        if (-not (Test-Path -LiteralPath $script:NormalizedProjectRoot -PathType Container)) { throw 'ProjectRoot is not an existing directory.' }
-        if ($null -ne (Get-UpvReparsePointOnPath $script:NormalizedProjectRoot)) { throw 'ProjectRoot traverses a reparse point.' }
-        foreach ($marker in @('Assets', 'Packages', 'ProjectSettings', 'ProjectSettings\ProjectVersion.txt')) {
-            if (-not (Test-Path -LiteralPath (Join-Path $script:NormalizedProjectRoot $marker))) { throw "ProjectRoot is missing Unity marker $marker." }
+    if ($Mode -eq 'PREBUILT_STANDALONE') {
+        try {
+            $BuildRoot = Get-UpvNormalizedPath -Path $BuildRoot
+            $PlayerExecutable = Get-UpvNormalizedPath -Path $PlayerExecutable
+            if (-not [string]::IsNullOrWhiteSpace($BuildReceiptPath)) { $BuildReceiptPath = Get-UpvNormalizedPath -Path $BuildReceiptPath }
+            $script:Result.input.projectRoot = $null
+            $script:Result.input.buildRoot = $BuildRoot
+            $script:Result.input.playerExecutable = $PlayerExecutable
+            $script:Result.input.buildReceiptPath = $BuildReceiptPath
+            $script:Result.prebuiltIdentity.buildRoot = $BuildRoot
+            $script:Result.prebuiltIdentity.executablePath = $PlayerExecutable
+            $script:Result.buildReceipt.requestedPath = $BuildReceiptPath
+        } catch {
+            Add-UpvrBlocker -Code 'PREBUILT_PATH_REJECTED' -Check 'input' -Path $PlayerExecutable -Message $_.Exception.Message
         }
-    } catch {
-        Add-UpvrBlocker -Code 'PROJECT_ROOT_REJECTED' -Check 'projectRoot' -Path $ProjectRoot -Message $_.Exception.Message
+    } else {
+        try {
+            $script:NormalizedProjectRoot = Get-UpvNormalizedPath -Path $ProjectRoot
+            $script:Result.input.projectRoot = $script:NormalizedProjectRoot
+            if (-not (Test-Path -LiteralPath $script:NormalizedProjectRoot -PathType Container)) { throw 'ProjectRoot is not an existing directory.' }
+            if ($null -ne (Get-UpvReparsePointOnPath $script:NormalizedProjectRoot)) { throw 'ProjectRoot traverses a reparse point.' }
+            foreach ($marker in @('Assets', 'Packages', 'ProjectSettings', 'ProjectSettings\ProjectVersion.txt')) {
+                if (-not (Test-Path -LiteralPath (Join-Path $script:NormalizedProjectRoot $marker))) { throw "ProjectRoot is missing Unity marker $marker." }
+            }
+        } catch {
+            Add-UpvrBlocker -Code 'PROJECT_ROOT_REJECTED' -Check 'projectRoot' -Path $ProjectRoot -Message $_.Exception.Message
+        }
     }
 
     if ($script:Blockers.Count -eq 0) {
         $requestedArtifactsRoot = if ([string]::IsNullOrWhiteSpace($ArtifactsRoot)) { Join-Path ([System.IO.Path]::GetTempPath()) 'upvr' } else { $ArtifactsRoot }
         try { Initialize-UpvrArtifactSession -RequestedRoot $requestedArtifactsRoot } catch { Add-UpvrBlocker -Code 'ARTIFACT_ROOT_REJECTED' -Check 'artifactBoundary' -Path $requestedArtifactsRoot -Message $_.Exception.Message }
     }
-    if ($script:Blockers.Count -eq 0 -and $Mode -eq 'SCENARIO_TEST_PLAYER') { Initialize-UpvrPlayerScenarioBundle }
-    if ($script:Blockers.Count -eq 0) { Initialize-UpvrOriginalIntegrity }
-    if ($script:Blockers.Count -eq 0) { Invoke-UpvrDoctorPreflight }
-    if ($script:Blockers.Count -eq 0) { Test-UpvrNoRunningUnityProcesses }
-    if ($script:Blockers.Count -eq 0) {
-        $localPackages = Get-UpvrLocalPackageAssessment -Root $script:NormalizedProjectRoot
-        $script:Result.preflight.localPackagesSafe = $localPackages.accepted
-        $script:Result.isolation.localPackageReferences = @($localPackages.references)
-        if (-not $localPackages.accepted) { Add-UpvrBlocker -Code 'LOCAL_PACKAGE_SAFETY_REJECTED' -Check 'localPackages' -Path (Join-Path $script:NormalizedProjectRoot 'Packages\manifest.json') -Message ([string]::Join(' ', [string[]]@($localPackages.errors))) }
+    if ($Mode -eq 'PREBUILT_STANDALONE') {
+        if ($script:Blockers.Count -eq 0) { Initialize-UpvrPrebuiltStandalone }
+        if ($script:Blockers.Count -eq 0) { Invoke-UpvrStandalonePlayer -OpaqueObservation:([string]::IsNullOrWhiteSpace($BuildReceiptPath)) }
+        if ($script:Result.processControl.standaloneRun.processStarted) {
+            if ([string]::IsNullOrWhiteSpace($BuildReceiptPath)) { Set-UpvrOpaqueLaunchEvidence } else { Set-UpvrStandaloneScenarioVerificationEvidence }
+        }
+    } else {
+        if ($script:Blockers.Count -eq 0 -and $Mode -eq 'SCENARIO_TEST_PLAYER') { Initialize-UpvrPlayerScenarioBundle }
+        if ($script:Blockers.Count -eq 0 -and $Mode -eq 'INSTRUMENTED_STANDALONE') { Initialize-UpvrStandaloneScenarioBundle }
+        if ($script:Blockers.Count -eq 0) { Initialize-UpvrOriginalIntegrity }
+        if ($script:Blockers.Count -eq 0) { Invoke-UpvrDoctorPreflight }
+        if ($script:Blockers.Count -eq 0) { Test-UpvrNoRunningUnityProcesses }
+        if ($script:Blockers.Count -eq 0) {
+            $localPackages = Get-UpvrLocalPackageAssessment -Root $script:NormalizedProjectRoot
+            $script:Result.preflight.localPackagesSafe = $localPackages.accepted
+            $script:Result.isolation.localPackageReferences = @($localPackages.references)
+            if (-not $localPackages.accepted) { Add-UpvrBlocker -Code 'LOCAL_PACKAGE_SAFETY_REJECTED' -Check 'localPackages' -Path (Join-Path $script:NormalizedProjectRoot 'Packages\manifest.json') -Message ([string]::Join(' ', [string[]]@($localPackages.errors))) }
+        }
+        if ($script:Blockers.Count -eq 0) { Resolve-UpvrEffectiveScriptingBackend }
+        if ($script:Blockers.Count -eq 0) { Test-UpvrCompatibilityAndEditor }
+        if ($script:Blockers.Count -eq 0) { Copy-UpvrProjectToIsolation }
+        if ($script:Blockers.Count -eq 0) {
+            $isolatedPackages = Get-UpvrLocalPackageAssessment -Root $script:Result.isolation.projectCopyPath
+            $script:Result.preflight.isolatedLocalPackagesSafe = $isolatedPackages.accepted
+            if (-not $isolatedPackages.accepted) { Add-UpvrBlocker -Code 'ISOLATED_LOCAL_PACKAGE_SAFETY_REJECTED' -Check 'localPackages' -Path (Join-Path $script:Result.isolation.projectCopyPath 'Packages\manifest.json') -Message ([string]::Join(' ', [string[]]@($isolatedPackages.errors))) }
+        }
+
+        if ($Mode -in @('TEST_PLAYER','SCENARIO_TEST_PLAYER')) {
+            if ($script:Blockers.Count -eq 0) { Add-UpvrP1InfrastructureOverlay }
+            if ($script:Blockers.Count -eq 0 -and $Mode -eq 'SCENARIO_TEST_PLAYER') { Add-UpvrP2ScenarioOverlay }
+            if ($script:Blockers.Count -eq 0) { Invoke-UpvrUnityTestPlayer }
+            if ($script:Result.unity.processStarted) { Set-UpvrResolvedTestFrameworkIdentity }
+            if ($script:Result.unity.processStarted) { Set-UpvrP1VerificationEvidence }
+            if ($script:Result.unity.processStarted -and $Mode -eq 'SCENARIO_TEST_PLAYER') { Set-UpvrP2ScenarioVerificationEvidence }
+        } else {
+            if ($script:Blockers.Count -eq 0) { Add-UpvrP3ScenarioOverlay }
+            if ($script:Blockers.Count -eq 0) { Invoke-UpvrStandaloneEditorBuild }
+            if ($script:Result.unity.processStarted) { Set-UpvrResolvedTestFrameworkIdentity }
+            if ($script:Result.unity.processStarted) { Set-UpvrStandaloneBuildEvidence }
+            if ($script:Blockers.Count -eq 0 -and $script:Result.verification.standaloneBuild.status -eq 'VERIFIED_SUCCESS') { Invoke-UpvrStandalonePlayer }
+            if ($script:Result.processControl.standaloneRun.processStarted) { Set-UpvrStandaloneScenarioVerificationEvidence }
+        }
     }
-    if ($script:Blockers.Count -eq 0) { Test-UpvrCompatibilityAndEditor }
-    if ($script:Blockers.Count -eq 0) { Copy-UpvrProjectToIsolation }
-    if ($script:Blockers.Count -eq 0) {
-        $isolatedPackages = Get-UpvrLocalPackageAssessment -Root $script:Result.isolation.projectCopyPath
-        $script:Result.preflight.isolatedLocalPackagesSafe = $isolatedPackages.accepted
-        if (-not $isolatedPackages.accepted) { Add-UpvrBlocker -Code 'ISOLATED_LOCAL_PACKAGE_SAFETY_REJECTED' -Check 'localPackages' -Path (Join-Path $script:Result.isolation.projectCopyPath 'Packages\manifest.json') -Message ([string]::Join(' ', [string[]]@($isolatedPackages.errors))) }
-    }
-    if ($script:Blockers.Count -eq 0) { Add-UpvrP1InfrastructureOverlay }
-    if ($script:Blockers.Count -eq 0 -and $Mode -eq 'SCENARIO_TEST_PLAYER') { Add-UpvrP2ScenarioOverlay }
-    if ($script:Blockers.Count -eq 0) { Invoke-UpvrUnityTestPlayer }
-    if ($script:Result.unity.processStarted) { Set-UpvrResolvedTestFrameworkIdentity }
-    if ($script:Result.unity.processStarted) { Set-UpvrP1VerificationEvidence }
-    if ($script:Result.unity.processStarted -and $Mode -eq 'SCENARIO_TEST_PLAYER') { Set-UpvrP2ScenarioVerificationEvidence }
 } catch {
     Add-UpvrBlocker -Code 'UNEXPECTED_VERIFIER_ERROR' -Check 'verifier' -Path $script:Result.input.projectRoot -Message $_.Exception.Message
 } finally {
     if ($null -ne $script:NormalizedProjectRoot -and (Test-Path -LiteralPath $script:NormalizedProjectRoot -PathType Container)) { Complete-UpvrOriginalIntegrity }
+    if ($Mode -eq 'PREBUILT_STANDALONE') { Complete-UpvrPrebuiltTreeIntegrity }
     Write-UpvrResult
 }

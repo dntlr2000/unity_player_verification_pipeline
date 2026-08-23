@@ -1,6 +1,6 @@
 interface:
   display_name: "Unity Player Verification"
-  short_description: "Verify approved Unity Windows Players from isolated copies"
+  short_description: "Verify approved Unity Test Players and Standalone EXEs"
   default_prompt: "Use $unity-player-verification only when I explicitly request it, preserve the source project, and report the exact JSON finalStatus."
 policy:
   allow_implicit_invocation: false
