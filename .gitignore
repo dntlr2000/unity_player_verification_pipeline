@@ -1,0 +1,7 @@
+.artifacts/
+Library/
+Temp/
+Logs/
+obj/
+*.user
+*.tmp

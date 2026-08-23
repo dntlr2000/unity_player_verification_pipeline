@@ -1,0 +1,42 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.invalid/unity-player-compatibility-1.0.0.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "entries"],
+  "properties": {
+    "schemaVersion": { "const": "1.0.0" },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "unityVersion", "testFrameworkVersion", "allowedSourceKind", "registryOrigin",
+          "unityExecutableSha256", "packageTreeSha256", "packageHashCanonicalization",
+          "target", "scriptingBackend", "windowsModuleTreeSha256", "moduleHashCanonicalization",
+          "minimumPhase", "status", "evidencePath"
+        ],
+        "properties": {
+          "unityVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+[abfp][0-9]+$" },
+          "testFrameworkVersion": { "type": "string", "minLength": 1 },
+          "allowedSourceKind": { "enum": ["registry", "builtin"] },
+          "registryOrigin": { "type": ["string", "null"] },
+          "unityExecutableSha256": { "$ref": "#/definitions/sha256" },
+          "packageTreeSha256": { "$ref": "#/definitions/sha256" },
+          "packageHashCanonicalization": { "const": "upv-package-tree-relative-path-length-sha256-lf-v1" },
+          "target": { "const": "StandaloneWindows64" },
+          "scriptingBackend": { "enum": ["Mono", "IL2CPP"] },
+          "windowsModuleTreeSha256": { "$ref": "#/definitions/sha256" },
+          "moduleHashCanonicalization": { "const": "upvr-tree-relative-path-length-sha256-lf-v1" },
+          "minimumPhase": { "enum": ["P1", "P2", "P3"] },
+          "status": { "enum": ["CANDIDATE", "APPROVED", "RETIRED"] },
+          "evidencePath": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  }
+}
