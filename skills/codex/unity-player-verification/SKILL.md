@@ -7,6 +7,8 @@ description: "Run approved Unity Windows Test Player, source-only Player scenari
 
 Use the bundled PowerShell entrypoint as the sole source of dynamic Player verification truth. It preserves the source project, accepts only exact approved Unity/Test Framework/Windows Support identities, controls spawned processes, and requires mode-specific receipts before making a positive claim.
 
+Component `0.2.0` enables `TEST_PLAYER` and `SCENARIO_TEST_PLAYER`. The Standalone modes remain fail-closed until component `0.3.0` is locally approved.
+
 ## Invocation policy
 
 - Require the literal name `$unity-player-verification` in the user's request.

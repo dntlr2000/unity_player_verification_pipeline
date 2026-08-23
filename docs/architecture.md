@@ -21,3 +21,5 @@ source project
 ```
 
 For Test Players, the command-line NUnit document returned through PlayerConnection and the runtime callback NUnit document must both exist and agree semantically. For instrumented Standalone builds, the build receipt, runtime scenario receipt, executable identity, and current build-tree fingerprint must agree. Opaque prebuilt executables are never promoted beyond launch-only verification.
+
+P2 adds a second source boundary. The external bundle permits only one root `manifest.json`, `.asmdef`, and `.cs`; blocks reparse points, binaries, unsafe/precompiled references, and OS input automation tokens; then copies the reviewed hashes into `Assets/__UnityPlayerVerification/Scenario` in the isolated project. A regular runtime Harness owns scenes, bounded waits, assertions, and pure-C# PNG encoding, while a separate Test Runner assembly owns the single fixed NUnit filter.

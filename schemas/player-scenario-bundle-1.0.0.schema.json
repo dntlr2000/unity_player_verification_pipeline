@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.codex/schemas/player-scenario-bundle-1.0.0.schema.json",
+  "title": "Unity Player Scenario Bundle Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "kind",
+    "scenarioId",
+    "displayName",
+    "timeoutSeconds",
+    "expectedScenes",
+    "expectedAssertionIds",
+    "expectedCaptureIds",
+    "graphicsRequired",
+    "testFilter"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1.0.0" },
+    "kind": { "const": "PLAYER_SCENARIO_BUNDLE" },
+    "scenarioId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+    "displayName": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 600 },
+    "expectedScenes": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 512 }
+    },
+    "expectedAssertionIds": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/identifier" }
+    },
+    "expectedCaptureIds": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/identifier" }
+    },
+    "graphicsRequired": { "type": "boolean" },
+    "testFilter": { "const": "UnityPlayerVerification.PlayerScenarioTest.ExecuteScenario" }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    }
+  }
+}

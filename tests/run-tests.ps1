@@ -14,6 +14,7 @@ $scriptsRoot = Join-Path $skillRoot 'scripts'
 $runner = Join-Path $scriptsRoot 'invoke-unity-player-verification.ps1'
 $schema = Join-Path $repositoryRoot 'schemas\unity-player-verification-result-1.0.0.schema.json'
 $compatibilitySchema = Join-Path $repositoryRoot 'schemas\unity-player-compatibility-1.0.0.schema.json'
+$scenarioSchema = Join-Path $repositoryRoot 'schemas\player-scenario-bundle-1.0.0.schema.json'
 $compatibilityRegistry = Join-Path $skillRoot 'config\unity-player-compatibility.json'
 . (Join-Path $scriptsRoot 'lib\unity-play-verification-core.ps1')
 . (Join-Path $scriptsRoot 'vendor\shared\unity-process-job.ps1')
@@ -202,6 +203,72 @@ $treeOne = Get-UpvrStableTreeSnapshot -Root $treeRoot
 $treeTwo = Get-UpvrStableTreeSnapshot -Root $treeRoot
 Assert-UpvrEqual -Actual $treeOne.treeSha256 -Expected $treeTwo.treeSha256 -Message 'Tree hashing must be deterministic.'
 Assert-UpvrEqual -Actual $treeOne.fileCount -Expected 2 -Message 'Tree inventory must retain every file.'
+
+$scenarioBundle = Join-Path $sessionRoot 'scenario-bundle'
+$scenarioManifest = @'
+{
+  "schemaVersion": "1.0.0",
+  "kind": "PLAYER_SCENARIO_BUNDLE",
+  "scenarioId": "fixture-scenario",
+  "displayName": "Fixture scenario",
+  "timeoutSeconds": 30,
+  "expectedScenes": ["P2Scene"],
+  "expectedAssertionIds": ["state-ready"],
+  "expectedCaptureIds": ["frame"],
+  "graphicsRequired": true,
+  "testFilter": "UnityPlayerVerification.PlayerScenarioTest.ExecuteScenario"
+}
+'@
+$scenarioAsmdef = @'
+{
+  "name": "Upvr.Fixture.Scenario",
+  "references": ["UnityPlayerVerification.Harness"],
+  "includePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": true
+}
+'@
+Write-UpvrFixtureText -Path (Join-Path $scenarioBundle 'manifest.json') -Text $scenarioManifest
+Write-UpvrFixtureText -Path (Join-Path $scenarioBundle 'Fixture.asmdef') -Text $scenarioAsmdef
+Write-UpvrFixtureText -Path (Join-Path $scenarioBundle 'Fixture.cs') -Text 'public sealed class FixtureScenario : UnityPlayerVerification.IPlayerVerificationScenario { public System.Collections.IEnumerator Execute(UnityPlayerVerification.PlayerVerificationContext context) { yield break; } }'
+$scenarioAssessment = Get-UpvrPlayerScenarioBundleAssessment -BundlePath $scenarioBundle
+Assert-UpvrTrue -Condition $scenarioAssessment.accepted -Message ('A valid source-only Player scenario bundle must pass: ' + [string]::Join(' ', [string[]]@($scenarioAssessment.errors)))
+Assert-UpvrEqual -Actual $scenarioAssessment.scenarioId -Expected 'fixture-scenario' -Message 'Scenario manifest identity'
+Assert-UpvrEqual -Actual $scenarioAssessment.fileCount -Expected 3 -Message 'Scenario inventory count'
+
+$scenarioDocument = Read-UpvJsonFile -Path (Join-Path $scenarioBundle 'manifest.json')
+$scenarioSchemaErrors = @(Invoke-JsonSchemaValidation -Instance $scenarioDocument -SchemaPath $scenarioSchema)
+Assert-UpvrEqual -Actual $scenarioSchemaErrors.Count -Expected 0 -Message 'Player scenario manifest schema validation'
+
+$forbiddenBundle = Join-Path $sessionRoot 'forbidden-bundle'
+Copy-Item -LiteralPath $scenarioBundle -Destination $forbiddenBundle -Recurse
+Write-UpvrFixtureText -Path (Join-Path $forbiddenBundle 'plugin.dll') -Text 'binary fixture'
+Assert-UpvrTrue -Condition (-not (Get-UpvrPlayerScenarioBundleAssessment -BundlePath $forbiddenBundle).accepted) -Message 'Scenario DLL files must be rejected.'
+
+$osInputBundle = Join-Path $sessionRoot 'os-input-bundle'
+Copy-Item -LiteralPath $scenarioBundle -Destination $osInputBundle -Recurse
+Write-UpvrFixtureText -Path (Join-Path $osInputBundle 'Fixture.cs') -Text 'public sealed class FixtureScenario : UnityPlayerVerification.IPlayerVerificationScenario { public System.Collections.IEnumerator Execute(UnityPlayerVerification.PlayerVerificationContext context) { SendInput(); yield break; } private void SendInput() {} }'
+Assert-UpvrTrue -Condition (-not (Get-UpvrPlayerScenarioBundleAssessment -BundlePath $osInputBundle).accepted) -Message 'OS input automation tokens must be rejected.'
+
+$screenshotRoot = Join-Path $sessionRoot 'scenario-screenshots'
+$capturePath = Join-Path $screenshotRoot 'frame.png'
+Write-UpvrFixtureText -Path $capturePath -Text 'PNG fixture bytes'
+$captureItem = Get-Item -LiteralPath $capturePath
+$scenarioReceiptPath = Join-Path $sessionRoot 'scenario-result.json'
+$scenarioReceipt = [ordered]@{
+    schemaVersion='1.0.0'; sessionToken='scenario-token'; scenarioId='fixture-scenario'
+    runStarted=$true; runFinished=$true; result='PASSED'; activeScene='P2Scene'; elapsedSeconds=1.0; exception=$null
+    assertions=@([ordered]@{ id='state-ready'; passed=$true; detail='ready' })
+    captures=@([ordered]@{ id='frame'; path=$capturePath; byteLength=[long]$captureItem.Length; sha256=(Get-UpvFileSha256 -Path $capturePath) })
+}
+Write-UpvrFixtureText -Path $scenarioReceiptPath -Text (ConvertTo-Json $scenarioReceipt -Depth 10 -Compress)
+$scenarioReceiptAssessment = Get-UpvrPlayerScenarioReceiptAssessment -Path $scenarioReceiptPath -Manifest $scenarioAssessment -ExpectedSessionToken 'scenario-token' -ScreenshotRoot $screenshotRoot
+Assert-UpvrTrue -Condition $scenarioReceiptAssessment.accepted -Message ('Matching scenario receipt and PNG must pass: ' + [string]::Join(' ', [string[]]@($scenarioReceiptAssessment.errors)))
+[System.IO.File]::Delete($capturePath)
+$missingCaptureAssessment = Get-UpvrPlayerScenarioReceiptAssessment -Path $scenarioReceiptPath -Manifest $scenarioAssessment -ExpectedSessionToken 'scenario-token' -ScreenshotRoot $screenshotRoot
+Assert-UpvrTrue -Condition (-not $missingCaptureAssessment.accepted -and $missingCaptureAssessment.missingCaptureIds -contains 'frame') -Message 'A requested missing PNG must block scenario evidence.'
 
 $nunitCases = @(
     [pscustomobject]@{ Name='pass'; Total=1; Passed=1; Failed=0; Skipped=0; Inconclusive=0; Result='Passed'; Class='PASSED' },

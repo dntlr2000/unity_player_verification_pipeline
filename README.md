@@ -19,6 +19,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\skills\codex\unity-pla
 | 0.2.0 | `SCENARIO_TEST_PLAYER` | A reviewed source-only scenario passed in an approved Mono Windows Test Player |
 | 0.3.0 | `INSTRUMENTED_STANDALONE`, `PREBUILT_STANDALONE` | Receipt-backed standalone behavior passed, or an opaque EXE met the narrower launch-only contract |
 
+Current release: `0.2.0`. `TEST_PLAYER` and `SCENARIO_TEST_PLAYER` are enabled; both Standalone modes remain fail-closed until P3.
+
 `PLAYER_VERIFIED` never means device input, production-binary equivalence, performance, subjective quality, or release readiness. An opaque executable can produce only `PLAYER_LAUNCH_VERIFIED`.
 
 See [architecture.md](docs/architecture.md) for trust boundaries and [the Skill guide](docs/skills/unity-player-verification.md) for operator usage.

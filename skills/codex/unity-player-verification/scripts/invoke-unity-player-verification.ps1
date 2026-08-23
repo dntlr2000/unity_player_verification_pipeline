@@ -66,8 +66,8 @@ $ProgressPreference = 'SilentlyContinue'
 
 $script:Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $script:SchemaVersion = '1.0.0'
-$script:ComponentVersion = '0.1.0'
-$script:VerifierVersion = '0.1.0'
+$script:ComponentVersion = '0.2.0'
+$script:VerifierVersion = '0.2.0'
 $script:ExpectedDoctorSchemaVersion = '1.1.0'
 $script:ExpectedDoctorScannerVersion = '0.2.1'
 $script:SkillRoot = Split-Path -Parent $PSScriptRoot
@@ -85,6 +85,7 @@ $script:IdentityLibraryPath = Join-Path $PSScriptRoot 'lib\unity-test-framework-
 $script:PlayerCoreLibraryPath = Join-Path $PSScriptRoot 'lib\unity-player-verification-core.ps1'
 $script:CompatibilityRegistryPath = Join-Path $script:SkillRoot 'config\unity-player-compatibility.json'
 $script:P1InfrastructureRoot = Join-Path $script:SkillRoot 'infrastructure\p1'
+$script:P2InfrastructureRoot = Join-Path $script:SkillRoot 'infrastructure\p2'
 $script:Blockers = New-Object System.Collections.ArrayList
 $script:Failures = New-Object System.Collections.ArrayList
 $script:Warnings = New-Object System.Collections.ArrayList
@@ -97,6 +98,7 @@ $script:OriginalFingerprintBefore = $null
 $script:GitSnapshotBefore = $null
 $script:TestFrameworkProvenance = $null
 $script:CompatibilityAssessment = $null
+$script:ScenarioAssessment = $null
 
 [Console]::OutputEncoding = $script:Utf8NoBom
 
@@ -203,6 +205,7 @@ function New-UpvrResult {
             copiedDirectoryCount = 0; copiedFileCount = 0; excludedTopLevelPaths = [string[]](Get-UnityCopyExcludedTopLevelNames)
             sourceFingerprint = $null; baseCopyFingerprint = $null; baseCopyMatched = $false
             infrastructureInjected = $false; infrastructurePath = $null; infrastructureTreeSha256 = $null
+            scenarioOverlayPath = $null; scenarioOverlayTreeSha256 = $null
             postOverlayFingerprint = $null; localPackageReferences = @()
         }
         build = [ordered]@{
@@ -232,7 +235,8 @@ function New-UpvrResult {
             requested = $Mode -in @('SCENARIO_TEST_PLAYER', 'INSTRUMENTED_STANDALONE')
             schemaVersion = $null; scenarioId = $null; displayName = $null; bundlePath = $ScenarioBundlePath
             bundleTreeSha256 = $null; expectedScenes = @(); expectedAssertionIds = @(); expectedCaptureIds = @()
-            assertions = @(); receiptAccepted = $false; receiptErrors = @()
+            timeoutSeconds = $null; graphicsRequired = $null; testFilter = $null; files = @()
+            activeScene = $null; assertions = @(); result = $null; receiptAccepted = $false; receiptErrors = @()
         }
         captures = [ordered]@{ requestedIds = @(); artifacts = @(); allPresent = $false; contentJudged = $false }
         buildReceipt = [ordered]@{ requestedPath = $BuildReceiptPath; exists = $false; accepted = $false; errors = @() }
@@ -264,7 +268,7 @@ function New-UpvrResult {
             unityStdoutPath = $null; unityStderrPath = $null; playerConnectionResultsPath = $null
             runtimeNUnitPath = $null; runtimeReceiptPath = $null; playerLogPath = $null
             buildReportPath = $null; buildTreePath = $null; scenarioReceiptPath = $null
-            screenshotRoot = $null; resultPath = $null; resultWritten = $false
+            scenarioContractPath = $null; screenshotRoot = $null; resultPath = $null; resultWritten = $false
         }
         verificationScopes = @(
             'scriptCompilation', 'windowsPlayerBuild', 'testPlayerExecution', 'playerConnection', 'playerTests',
@@ -374,6 +378,7 @@ function Initialize-UpvrArtifactSession {
     $script:Result.artifacts.buildReportPath = Join-Path $script:SessionRoot 'build-report.json'
     $script:Result.artifacts.buildTreePath = Join-Path $script:SessionRoot 'build-tree.json'
     $script:Result.artifacts.scenarioReceiptPath = Join-Path $script:SessionRoot 'scenario-result.json'
+    $script:Result.artifacts.scenarioContractPath = Join-Path $script:SessionRoot 'scenario-contract.json'
     $script:Result.artifacts.screenshotRoot = Join-Path $script:SessionRoot 'screenshots'
     $script:Result.artifacts.resultPath = Join-Path $script:SessionRoot 'result.json'
     Add-UpvrEvidence -Check 'artifactBoundary' -Status 'PASSED' -Source $script:SessionRoot -Detail 'All mutable project copies, builds, logs, receipts, and results are under one external non-reparse session.'
@@ -665,14 +670,75 @@ function Add-UpvrP1InfrastructureOverlay {
     }
 }
 
+# Validates the external source-only scenario bundle before any file is copied.
+function Initialize-UpvrPlayerScenarioBundle {
+    try {
+        $assessment = Get-UpvrPlayerScenarioBundleAssessment -BundlePath $ScenarioBundlePath
+        if (-not $assessment.accepted) { throw ([string]::Join(' ', [string[]]@($assessment.errors))) }
+        if (Test-UpvPathWithinRoot -Path $assessment.root -Root $script:NormalizedProjectRoot) { throw 'ScenarioBundlePath must be outside the original Unity project.' }
+        if (Test-UpvPathWithinRoot -Path $assessment.root -Root $script:SessionRoot) { throw 'ScenarioBundlePath cannot be inside the mutable artifact session.' }
+        $script:ScenarioAssessment = $assessment
+        $script:Result.selection.scenarioId = $assessment.scenarioId
+        foreach ($property in @('schemaVersion', 'scenarioId', 'displayName', 'timeoutSeconds', 'expectedScenes', 'expectedAssertionIds', 'expectedCaptureIds', 'graphicsRequired', 'testFilter')) {
+            $script:Result.scenario[$property] = $assessment.$property
+        }
+        $script:Result.scenario.bundlePath = $assessment.root
+        $script:Result.scenario.bundleTreeSha256 = $assessment.treeSha256
+        $script:Result.scenario.files = @($assessment.files | ForEach-Object { [ordered]@{ path = $_.path; length = $_.length; sha256 = $_.sha256 } })
+        $script:Result.captures.requestedIds = [string[]]@($assessment.expectedCaptureIds)
+        Add-UpvrEvidence -Check 'scenarioBundle' -Status 'PASSED' -Source $assessment.root -Detail "Source-only Player scenario $($assessment.scenarioId) has immutable tree SHA-256 $($assessment.treeSha256)."
+    } catch {
+        Add-UpvrBlocker -Code 'PLAYER_SCENARIO_BUNDLE_REJECTED' -Check 'scenario' -Path $ScenarioBundlePath -Message $_.Exception.Message
+    }
+}
+
+# Injects the pinned Player scenario harness and reviewed bundle only into the isolated reservation.
+function Add-UpvrP2ScenarioOverlay {
+    try {
+        if ($null -eq $script:ScenarioAssessment) { throw 'No validated Player scenario bundle is available.' }
+        $reservedPath = [string]$script:Result.isolation.infrastructurePath
+        if ([string]::IsNullOrWhiteSpace($reservedPath) -or -not (Test-Path -LiteralPath $reservedPath -PathType Container)) { throw 'P1 infrastructure reservation is unavailable.' }
+        $harness = Get-UpvrInfrastructureFingerprint -InfrastructureRoot $script:P2InfrastructureRoot
+        Copy-UpvrVerifiedInventory -Files $harness.files -DestinationRoot $reservedPath
+        $scenarioPath = Join-Path $reservedPath 'Scenario'
+        if (Test-Path -LiteralPath $scenarioPath) { throw 'Reserved Player scenario overlay path already exists.' }
+        [void][System.IO.Directory]::CreateDirectory($scenarioPath)
+        Copy-UpvrVerifiedInventory -Files $script:ScenarioAssessment.files -DestinationRoot $scenarioPath
+        $copiedScenario = Get-UpvrPlayerScenarioBundleAssessment -BundlePath $scenarioPath
+        if (-not $copiedScenario.accepted -or $copiedScenario.treeSha256 -cne $script:ScenarioAssessment.treeSha256) { throw 'Copied Player scenario overlay hash does not match the reviewed bundle.' }
+
+        $runtimeContract = [ordered]@{
+            schemaVersion = '1.0.0'
+            sessionToken = $script:SessionToken
+            scenarioId = $script:ScenarioAssessment.scenarioId
+            displayName = $script:ScenarioAssessment.displayName
+            timeoutSeconds = [int]$script:ScenarioAssessment.timeoutSeconds
+            expectedScenes = [string[]]@($script:ScenarioAssessment.expectedScenes)
+            expectedAssertionIds = [string[]]@($script:ScenarioAssessment.expectedAssertionIds)
+            expectedCaptureIds = [string[]]@($script:ScenarioAssessment.expectedCaptureIds)
+            graphicsRequired = [bool]$script:ScenarioAssessment.graphicsRequired
+        }
+        Write-UpvrText -Path $script:Result.artifacts.scenarioContractPath -Content (ConvertTo-Json $runtimeContract -Depth 10 -Compress)
+        $script:Result.isolation.scenarioOverlayPath = $scenarioPath
+        $script:Result.isolation.scenarioOverlayTreeSha256 = $copiedScenario.treeSha256
+        $script:Result.isolation.infrastructureTreeSha256 = (Get-UpvrTreeSnapshot -Root $reservedPath -ExcludedRelativePrefixes @('Scenario')).treeSha256
+        $script:Result.isolation.postOverlayFingerprint = (Get-StableUnityCopySetFingerprint -ProjectRoot $script:Result.isolation.projectCopyPath).treeSha256
+        $script:Result.isolation.status = 'SCENARIO_INJECTED'
+        Add-UpvrEvidence -Check 'scenarioOverlay' -Status 'PASSED' -Source $scenarioPath -Detail 'The reviewed bundle and pinned P2 harness were injected only after the base-copy fingerprint matched.'
+    } catch {
+        Add-UpvrBlocker -Code 'PLAYER_SCENARIO_OVERLAY_REJECTED' -Check 'scenario' -Path $ScenarioBundlePath -Message $_.Exception.Message
+    }
+}
+
 # Starts signed Unity with a closed Test Player argument and environment contract inside one Job Object.
 function Invoke-UpvrUnityTestPlayer {
+    $effectiveTestFilter = if ($Mode -eq 'SCENARIO_TEST_PLAYER') { [string]$script:ScenarioAssessment.testFilter } else { $TestFilter }
     $arguments = New-UpvrTestPlayerArguments `
         -ProjectPath $script:Result.isolation.projectCopyPath `
         -TestResultsPath $script:Result.artifacts.playerConnectionResultsPath `
         -EditorLogPath $script:Result.artifacts.editorLogPath `
         -UpmLogPath $script:Result.artifacts.upmLogPath `
-        -TestFilter $TestFilter `
+        -TestFilter $effectiveTestFilter `
         -TestCategory $TestCategory `
         -AssemblyNames $AssemblyNames
     $script:Result.unity.arguments = $arguments
@@ -697,7 +763,12 @@ function Invoke-UpvrUnityTestPlayer {
         UPVR_RUNTIME_NUNIT_PATH = $script:Result.artifacts.runtimeNUnitPath
         UPVR_RUNTIME_RECEIPT_PATH = $script:Result.artifacts.runtimeReceiptPath
         UPVR_RUNTIME_LOG_PATH = $script:Result.artifacts.playerLogPath
-        UPVR_MODE = 'TEST_PLAYER'
+        UPVR_MODE = $Mode
+    }
+    if ($Mode -eq 'SCENARIO_TEST_PLAYER') {
+        $environment.UPVR_SCENARIO_CONTRACT_PATH = $script:Result.artifacts.scenarioContractPath
+        $environment.UPVR_SCENARIO_RECEIPT_PATH = $script:Result.artifacts.scenarioReceiptPath
+        $environment.UPVR_SCREENSHOT_ROOT = $script:Result.artifacts.screenshotRoot
     }
     $previous = [ordered]@{}
     foreach ($name in $environment.Keys) {
@@ -983,6 +1054,84 @@ function Set-UpvrP1VerificationEvidence {
     }
 }
 
+# Validates the independent scenario receipt, exact IDs, and requested PNG identities.
+function Set-UpvrP2ScenarioVerificationEvidence {
+    if ($null -eq $script:ScenarioAssessment) {
+        $script:Result.verification.scenarioBehavior.status = 'BLOCKED'
+        $script:Result.verification.scenarioBehavior.reason = 'The validated Player scenario manifest is unavailable.'
+        Add-UpvrBlocker -Code 'PLAYER_SCENARIO_MANIFEST_UNAVAILABLE' -Check 'scenarioBehavior' -Path $ScenarioBundlePath -Message $script:Result.verification.scenarioBehavior.reason
+        return
+    }
+
+    $receipt = Get-UpvrPlayerScenarioReceiptAssessment `
+        -Path $script:Result.artifacts.scenarioReceiptPath `
+        -Manifest $script:ScenarioAssessment `
+        -ExpectedSessionToken $script:SessionToken `
+        -ScreenshotRoot $script:Result.artifacts.screenshotRoot
+    $script:Result.scenario.receiptAccepted = [bool]$receipt.accepted
+    $script:Result.scenario.receiptErrors = @($receipt.errors)
+    $script:Result.scenario.activeScene = $receipt.activeScene
+    $script:Result.scenario.assertions = @($receipt.assertions)
+    $script:Result.scenario.result = $receipt.result
+    $script:Result.captures.artifacts = @($receipt.captures)
+    $script:Result.captures.allPresent = [bool]$receipt.capturesPresent
+    $script:Result.captures.contentJudged = $false
+
+    $concreteEarlierFailure = @(
+        $script:Result.verification.scriptCompilation.status,
+        $script:Result.verification.windowsPlayerBuild.status,
+        $script:Result.verification.testPlayerExecution.status
+    ) -contains 'VERIFIED_FAILURE'
+    $timeoutObserved = $script:Result.processControl.timeoutPhase -eq 'RUN' -or [string]$receipt.exception -match '(?i)TimeoutException|timed out|timeout'
+    if (-not $receipt.exists) {
+        if ($concreteEarlierFailure) {
+            $script:Result.verification.scenarioBehavior.status = 'NOT_VERIFIED'
+            $script:Result.verification.scenarioBehavior.reason = 'A concrete compilation, build, or Player crash failure prevented the scenario receipt.'
+        } else {
+            $script:Result.verification.scenarioBehavior.status = 'BLOCKED'
+            $script:Result.verification.scenarioBehavior.reason = 'The Player scenario receipt is missing.'
+            Add-UpvrBlocker -Code 'PLAYER_SCENARIO_RECEIPT_MISSING' -Check 'scenarioBehavior' -Path $script:Result.artifacts.scenarioReceiptPath -Message $script:Result.verification.scenarioBehavior.reason
+        }
+    } elseif ($timeoutObserved) {
+        $script:Result.verification.scenarioBehavior.status = 'BLOCKED'
+        $script:Result.verification.scenarioBehavior.reason = 'The Player scenario did not complete within its bounded timeout.'
+        Add-UpvrBlocker -Code 'PLAYER_SCENARIO_TIMEOUT' -Check 'scenarioBehavior' -Path $script:Result.artifacts.scenarioReceiptPath -Message $script:Result.verification.scenarioBehavior.reason
+    } elseif (-not $receipt.assertionIdsMatched -or -not $receipt.scenarioIdMatched -or -not $receipt.sceneMatched -or -not $receipt.runFinished) {
+        $script:Result.verification.scenarioBehavior.status = 'BLOCKED'
+        $script:Result.verification.scenarioBehavior.reason = 'Scenario receipt identity, Scene, completion, or assertion IDs do not exactly match the manifest.'
+        Add-UpvrBlocker -Code 'PLAYER_SCENARIO_RECEIPT_MISMATCH' -Check 'scenarioBehavior' -Path $script:Result.artifacts.scenarioReceiptPath -Message ([string]::Join(' ', [string[]]@($receipt.errors)))
+    } elseif (-not $receipt.assertionsPassed -or [string]$receipt.result -cne 'PASSED') {
+        $script:Result.verification.scenarioBehavior.status = 'VERIFIED_FAILURE'
+        $script:Result.verification.scenarioBehavior.reason = 'One or more manifest-owned Player scenario assertions failed.'
+        Add-UpvrFailure -Code 'PLAYER_SCENARIO_ASSERTION_FAILED' -Check 'scenarioBehavior' -Path $script:Result.artifacts.scenarioReceiptPath -Message $script:Result.verification.scenarioBehavior.reason
+    } elseif ($receipt.accepted) {
+        $script:Result.verification.scenarioBehavior.status = 'VERIFIED_SUCCESS'
+        $script:Result.verification.scenarioBehavior.reason = 'Scenario ID, active Scene, assertions, and completion receipt exactly match the reviewed manifest.'
+        Add-UpvrEvidence -Check 'scenarioBehavior' -Status 'PASSED' -Source $script:Result.artifacts.scenarioReceiptPath -Detail $script:Result.verification.scenarioBehavior.reason
+    } else {
+        $script:Result.verification.scenarioBehavior.status = 'BLOCKED'
+        $script:Result.verification.scenarioBehavior.reason = 'Scenario receipt evidence is incomplete or internally inconsistent.'
+        Add-UpvrBlocker -Code 'PLAYER_SCENARIO_EVIDENCE_INCOMPLETE' -Check 'scenarioBehavior' -Path $script:Result.artifacts.scenarioReceiptPath -Message ([string]::Join(' ', [string[]]@($receipt.errors)))
+    }
+
+    if (-not $receipt.exists -and $concreteEarlierFailure) {
+        $script:Result.verification.visualEvidence.status = 'NOT_VERIFIED'
+        $script:Result.verification.visualEvidence.reason = 'A concrete compilation, build, or Player crash failure prevented capture evidence.'
+    } elseif (-not $receipt.captureIdsMatched -or -not $receipt.capturesPresent) {
+        $script:Result.verification.visualEvidence.status = 'BLOCKED'
+        $script:Result.verification.visualEvidence.reason = 'Requested Player PNG IDs or file identities are missing or mismatched.'
+        Add-UpvrBlocker -Code 'PLAYER_SCENARIO_CAPTURE_MISSING' -Check 'visualEvidence' -Path $script:Result.artifacts.screenshotRoot -Message $script:Result.verification.visualEvidence.reason
+    } else {
+        $script:Result.verification.visualEvidence.status = 'VERIFIED_SUCCESS'
+        $script:Result.verification.visualEvidence.reason = if ($script:ScenarioAssessment.expectedCaptureIds.Count -eq 0) {
+            'The manifest requested no visual artifacts and the receipt emitted no unexpected capture IDs.'
+        } else {
+            'Every requested PNG exists with matching nonzero length and SHA-256; image content was not judged.'
+        }
+        Add-UpvrEvidence -Check 'visualEvidence' -Status 'PASSED' -Source $script:Result.artifacts.screenshotRoot -Detail $script:Result.verification.visualEvidence.reason
+    }
+}
+
 # Recomputes source content and Git metadata after all dynamic work completes.
 function Complete-UpvrOriginalIntegrity {
     if ($null -ne $script:OriginalFingerprintBefore) {
@@ -1019,6 +1168,8 @@ function Complete-UpvrOriginalIntegrity {
 function Complete-UpvrResult {
     $requiredScopes = if ($Mode -eq 'TEST_PLAYER') {
         @('scriptCompilation', 'windowsPlayerBuild', 'testPlayerExecution', 'playerConnection', 'playerTests')
+    } elseif ($Mode -eq 'SCENARIO_TEST_PLAYER') {
+        @('scriptCompilation', 'windowsPlayerBuild', 'testPlayerExecution', 'playerConnection', 'playerTests', 'scenarioBehavior', 'visualEvidence')
     } else {
         @()
     }
@@ -1058,17 +1209,20 @@ function Write-UpvrResult {
 }
 
 try {
-    if ($Mode -ne 'TEST_PLAYER') {
+    if ($Mode -notin @('TEST_PLAYER', 'SCENARIO_TEST_PLAYER')) {
         Add-UpvrBlocker -Code 'MODE_NOT_AVAILABLE_IN_COMPONENT_VERSION' -Check 'mode' -Path $null -Message "Mode $Mode is reserved but is not available in component $($script:ComponentVersion)."
     }
-    if ($Mode -eq 'TEST_PLAYER' -and $ScriptingBackend -cne 'Mono') {
-        Add-UpvrBlocker -Code 'P1_BACKEND_REJECTED' -Check 'scriptingBackend' -Path $null -Message 'TEST_PLAYER is sealed to Mono through P2.'
+    if ($Mode -in @('TEST_PLAYER', 'SCENARIO_TEST_PLAYER') -and $ScriptingBackend -cne 'Mono') {
+        Add-UpvrBlocker -Code 'P1_P2_BACKEND_REJECTED' -Check 'scriptingBackend' -Path $null -Message 'Test Player modes are sealed to Mono through P2.'
     }
     foreach ($selectorName in @('TestFilter', 'TestCategory', 'AssemblyNames')) {
         $assessment = Test-UpvSelectorValue -Value (Get-Variable -Name $selectorName -ValueOnly) -Name $selectorName
         if (-not $assessment.accepted) { Add-UpvrBlocker -Code 'TEST_SELECTOR_REJECTED' -Check 'selection' -Path $null -Message $assessment.error }
     }
-    if (-not [string]::IsNullOrWhiteSpace($ScenarioBundlePath)) { Add-UpvrBlocker -Code 'P1_SCENARIO_INPUT_REJECTED' -Check 'selection' -Path $ScenarioBundlePath -Message 'ScenarioBundlePath is reserved for P2/P3 modes.' }
+    $selectorSupplied = -not [string]::IsNullOrWhiteSpace($TestFilter) -or -not [string]::IsNullOrWhiteSpace($TestCategory) -or -not [string]::IsNullOrWhiteSpace($AssemblyNames)
+    if ($Mode -eq 'SCENARIO_TEST_PLAYER' -and $selectorSupplied) { Add-UpvrBlocker -Code 'SCENARIO_SELECTOR_CONFLICT' -Check 'selection' -Path $null -Message 'ScenarioBundlePath and test selection parameters cannot be combined; the manifest owns the fixed harness filter.' }
+    if ($Mode -eq 'SCENARIO_TEST_PLAYER' -and [string]::IsNullOrWhiteSpace($ScenarioBundlePath)) { Add-UpvrBlocker -Code 'SCENARIO_BUNDLE_REQUIRED' -Check 'selection' -Path $null -Message 'SCENARIO_TEST_PLAYER requires ScenarioBundlePath.' }
+    if ($Mode -eq 'TEST_PLAYER' -and -not [string]::IsNullOrWhiteSpace($ScenarioBundlePath)) { Add-UpvrBlocker -Code 'TEST_PLAYER_SCENARIO_CONFLICT' -Check 'selection' -Path $ScenarioBundlePath -Message 'TEST_PLAYER cannot be combined with ScenarioBundlePath.' }
     if (-not [string]::IsNullOrWhiteSpace($BuildRoot) -or -not [string]::IsNullOrWhiteSpace($PlayerExecutable) -or -not [string]::IsNullOrWhiteSpace($BuildReceiptPath)) {
         Add-UpvrBlocker -Code 'PROJECT_PREBUILT_INPUT_CONFLICT' -Check 'input' -Path $null -Message 'Project modes cannot be combined with prebuilt inputs.'
     }
@@ -1089,6 +1243,7 @@ try {
         $requestedArtifactsRoot = if ([string]::IsNullOrWhiteSpace($ArtifactsRoot)) { Join-Path ([System.IO.Path]::GetTempPath()) 'upvr' } else { $ArtifactsRoot }
         try { Initialize-UpvrArtifactSession -RequestedRoot $requestedArtifactsRoot } catch { Add-UpvrBlocker -Code 'ARTIFACT_ROOT_REJECTED' -Check 'artifactBoundary' -Path $requestedArtifactsRoot -Message $_.Exception.Message }
     }
+    if ($script:Blockers.Count -eq 0 -and $Mode -eq 'SCENARIO_TEST_PLAYER') { Initialize-UpvrPlayerScenarioBundle }
     if ($script:Blockers.Count -eq 0) { Initialize-UpvrOriginalIntegrity }
     if ($script:Blockers.Count -eq 0) { Invoke-UpvrDoctorPreflight }
     if ($script:Blockers.Count -eq 0) { Test-UpvrNoRunningUnityProcesses }
@@ -1106,9 +1261,11 @@ try {
         if (-not $isolatedPackages.accepted) { Add-UpvrBlocker -Code 'ISOLATED_LOCAL_PACKAGE_SAFETY_REJECTED' -Check 'localPackages' -Path (Join-Path $script:Result.isolation.projectCopyPath 'Packages\manifest.json') -Message ([string]::Join(' ', [string[]]@($isolatedPackages.errors))) }
     }
     if ($script:Blockers.Count -eq 0) { Add-UpvrP1InfrastructureOverlay }
+    if ($script:Blockers.Count -eq 0 -and $Mode -eq 'SCENARIO_TEST_PLAYER') { Add-UpvrP2ScenarioOverlay }
     if ($script:Blockers.Count -eq 0) { Invoke-UpvrUnityTestPlayer }
     if ($script:Result.unity.processStarted) { Set-UpvrResolvedTestFrameworkIdentity }
     if ($script:Result.unity.processStarted) { Set-UpvrP1VerificationEvidence }
+    if ($script:Result.unity.processStarted -and $Mode -eq 'SCENARIO_TEST_PLAYER') { Set-UpvrP2ScenarioVerificationEvidence }
 } catch {
     Add-UpvrBlocker -Code 'UNEXPECTED_VERIFIER_ERROR' -Check 'verifier' -Path $script:Result.input.projectRoot -Message $_.Exception.Message
 } finally {

@@ -26,3 +26,21 @@ Each combination passed these signed-Unity cases:
 Every case recorded zero remaining Job Object processes and `UNCHANGED` source-copy integrity. The pass cases also retained matching PlayerConnection and Player-side NUnit summaries, runtime receipt/log evidence, a pipeline build callback receipt, Test Player executable/Data identity, and full build-tree hashes.
 
 Unity 6 reports `BuildReport.summary.result = Unknown` from the `IPostprocessBuildWithReport` callback before the summary is finalized. P1 accepts that callback-time value only when total errors are zero and independent positive output-tree, Player execution, NUnit, process-exit, and Editor-log evidence all agree. It cannot produce a positive verdict by itself.
+
+## P2 — approved 2026-08-23
+
+P2 passed five cases on each approved Unity version: a complete scenario with PNG capture, deliberate assertion failure, requested capture omission, manifest timeout, and overlay compilation failure. All 15 cases preserved the source project and matched their expected final state.
+
+| Unity | Test Framework | success | assertion | missing capture | timeout | compile failure |
+| --- | --- | --- | --- | --- | --- | --- |
+| `2022.3.62f3` | `1.1.33` registry | `PLAYER_VERIFIED` | `PLAYER_FAILED` | `VERIFICATION_BLOCKED` | `VERIFICATION_BLOCKED` | `PLAYER_FAILED` |
+| `6000.0.69f1` | `1.6.0` builtin | `PLAYER_VERIFIED` | `PLAYER_FAILED` | `VERIFICATION_BLOCKED` | `VERIFICATION_BLOCKED` | `PLAYER_FAILED` |
+| `6000.5.3f1` | `1.7.0` builtin | `PLAYER_VERIFIED` | `PLAYER_FAILED` | `VERIFICATION_BLOCKED` | `VERIFICATION_BLOCKED` | `PLAYER_FAILED` |
+
+Machine-readable summaries are retained at:
+
+- `E:\CodexValidation\unity-player-verification-p2-matrix-2022\acceptance-summary.json`
+- `E:\CodexValidation\unity-player-verification-p2-matrix-6000.0\acceptance-summary.json`
+- `E:\CodexValidation\unity-player-verification-p2-matrix-6000.5\acceptance-summary.json`
+
+The PNG verdict checks only the manifest ID, expected path, nonzero size, and SHA-256. It does not judge image content.

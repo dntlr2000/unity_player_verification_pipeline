@@ -586,3 +586,237 @@ function Get-UpvrFinalStatusAssessment {
     }
     return 'PLAYER_VERIFIED'
 }
+
+# Validates one source-only Player scenario bundle and returns its immutable inventory.
+function Get-UpvrPlayerScenarioBundleAssessment {
+    param([Parameter(Mandatory = $true)][string]$BundlePath)
+
+    $result = [ordered]@{
+        accepted = $false
+        root = $null
+        schemaVersion = $null
+        kind = $null
+        scenarioId = $null
+        displayName = $null
+        timeoutSeconds = $null
+        expectedScenes = @()
+        expectedAssertionIds = @()
+        expectedCaptureIds = @()
+        graphicsRequired = $null
+        testFilter = $null
+        fileCount = 0
+        treeSha256 = $null
+        files = @()
+        errors = @()
+    }
+    $errors = New-Object System.Collections.ArrayList
+    try {
+        $root = Get-UpvNormalizedPath -Path $BundlePath
+        $result.root = $root
+        if (-not (Test-Path -LiteralPath $root -PathType Container)) { throw 'ScenarioBundlePath is not an existing directory.' }
+        $reparse = Get-UpvReparsePointOnPath -Path $root
+        if ($null -ne $reparse) { throw "Scenario bundle traverses a reparse point: $reparse" }
+        $files = @(Get-UpvBundleFileInventory -BundleRoot $root)
+        if ($files.Count -eq 0) { throw 'Scenario bundle is empty.' }
+        $manifestFiles = @($files | Where-Object { [string]$_.path -ceq 'manifest.json' })
+        if ($manifestFiles.Count -ne 1) { throw 'Scenario bundle must contain exactly one root manifest.json.' }
+        $sourceFiles = @($files | Where-Object { [System.IO.Path]::GetExtension([string]$_.path) -ceq '.cs' })
+        $assemblyFiles = @($files | Where-Object { [System.IO.Path]::GetExtension([string]$_.path) -ceq '.asmdef' })
+        if ($sourceFiles.Count -eq 0 -or $assemblyFiles.Count -eq 0) { throw 'Scenario bundle requires at least one .cs source and one .asmdef.' }
+        foreach ($file in $files) {
+            $extension = [System.IO.Path]::GetExtension([string]$file.path)
+            if ([string]$file.path -cne 'manifest.json' -and $extension -notin @('.cs', '.asmdef')) {
+                [void]$errors.Add("Scenario bundle contains forbidden file type: $($file.path)")
+            }
+        }
+
+        $manifest = Read-UpvJsonFile -Path $manifestFiles[0].sourcePath
+        $contract = Test-UpvExactJsonProperties -InputObject $manifest -RequiredNames @(
+            'schemaVersion', 'kind', 'scenarioId', 'displayName', 'timeoutSeconds', 'expectedScenes',
+            'expectedAssertionIds', 'expectedCaptureIds', 'graphicsRequired', 'testFilter'
+        ) -Context 'Player scenario manifest'
+        foreach ($contractError in @($contract.errors)) { [void]$errors.Add($contractError) }
+        $result.schemaVersion = [string](Get-UpvJsonProperty $manifest 'schemaVersion')
+        $result.kind = [string](Get-UpvJsonProperty $manifest 'kind')
+        $result.scenarioId = [string](Get-UpvJsonProperty $manifest 'scenarioId')
+        $result.displayName = [string](Get-UpvJsonProperty $manifest 'displayName')
+        $result.timeoutSeconds = Get-UpvJsonProperty $manifest 'timeoutSeconds'
+        $result.expectedScenes = [string[]]@((Get-UpvJsonProperty $manifest 'expectedScenes'))
+        $result.expectedAssertionIds = [string[]]@((Get-UpvJsonProperty $manifest 'expectedAssertionIds'))
+        $result.expectedCaptureIds = [string[]]@((Get-UpvJsonProperty $manifest 'expectedCaptureIds'))
+        $result.graphicsRequired = Get-UpvJsonProperty $manifest 'graphicsRequired'
+        $result.testFilter = [string](Get-UpvJsonProperty $manifest 'testFilter')
+        if ($result.schemaVersion -cne '1.0.0') { [void]$errors.Add('Scenario manifest schemaVersion must be 1.0.0.') }
+        if ($result.kind -cne 'PLAYER_SCENARIO_BUNDLE') { [void]$errors.Add('Scenario manifest kind must be PLAYER_SCENARIO_BUNDLE.') }
+        if ($result.scenarioId -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$') { [void]$errors.Add('Scenario manifest scenarioId is invalid.') }
+        if ([string]::IsNullOrWhiteSpace($result.displayName) -or $result.displayName.Length -gt 256) { [void]$errors.Add('Scenario manifest displayName is invalid.') }
+        if ($result.timeoutSeconds -isnot [int] -and $result.timeoutSeconds -isnot [long]) { [void]$errors.Add('Scenario manifest timeoutSeconds must be an integer.') }
+        elseif ([long]$result.timeoutSeconds -lt 1 -or [long]$result.timeoutSeconds -gt 600) { [void]$errors.Add('Scenario manifest timeoutSeconds must be between 1 and 600.') }
+        if ($result.expectedScenes.Count -eq 0 -or @($result.expectedScenes | Where-Object { [string]::IsNullOrWhiteSpace($_) -or $_.Length -gt 512 -or $_ -match '[\x00-\x1f]' }).Count -gt 0) {
+            [void]$errors.Add('Scenario manifest expectedScenes must contain safe non-empty values.')
+        }
+        if (@($result.expectedScenes | Sort-Object -Unique).Count -ne $result.expectedScenes.Count) { [void]$errors.Add('Scenario manifest expectedScenes contains duplicates.') }
+        $assertionIds = Test-UpvIdentifierArray -Value (,$result.expectedAssertionIds) -Name 'expectedAssertionIds'
+        $captureIds = Test-UpvIdentifierArray -Value (,$result.expectedCaptureIds) -Name 'expectedCaptureIds'
+        foreach ($identifierError in @($assertionIds.errors) + @($captureIds.errors)) { [void]$errors.Add($identifierError) }
+        if ($result.expectedAssertionIds.Count -eq 0) { [void]$errors.Add('Scenario manifest expectedAssertionIds must contain at least one ID.') }
+        if ($result.graphicsRequired -isnot [bool]) { [void]$errors.Add('Scenario manifest graphicsRequired must be boolean.') }
+        if ($result.testFilter -cne 'UnityPlayerVerification.PlayerScenarioTest.ExecuteScenario') { [void]$errors.Add('Scenario manifest testFilter is not the fixed Player harness test.') }
+
+        $interfaceObserved = $false
+        foreach ($source in $sourceFiles) {
+            $text = [System.IO.File]::ReadAllText([string]$source.sourcePath, [System.Text.Encoding]::UTF8)
+            if ($text -match '\bIPlayerVerificationScenario\b') { $interfaceObserved = $true }
+            if ($text -match '(?i)\b(SendInput|SetCursorPos|mouse_event|keybd_event|InputSimulator)\b|user32\.dll|System\.Windows\.Forms') {
+                [void]$errors.Add("Scenario source contains forbidden OS input automation: $($source.path)")
+            }
+        }
+        if (-not $interfaceObserved) { [void]$errors.Add('Scenario source does not reference IPlayerVerificationScenario.') }
+
+        foreach ($assembly in $assemblyFiles) {
+            $asmdef = Read-UpvJsonFile -Path $assembly.sourcePath
+            $name = [string](Get-UpvJsonProperty $asmdef 'name')
+            if ([string]::IsNullOrWhiteSpace($name) -or $name -match '^UnityPlayerVerification\.') { [void]$errors.Add("Scenario asmdef has a missing or reserved assembly name: $($assembly.path)") }
+            $references = [string[]]@((Get-UpvJsonProperty $asmdef 'references'))
+            if ($references -notcontains 'UnityPlayerVerification.Harness') { [void]$errors.Add("Scenario asmdef must reference UnityPlayerVerification.Harness: $($assembly.path)") }
+            $unsafe = Get-UpvJsonProperty $asmdef 'allowUnsafeCode'
+            if ($null -ne $unsafe -and [bool]$unsafe) { [void]$errors.Add("Scenario asmdef cannot enable unsafe code: $($assembly.path)") }
+            $precompiled = @((Get-UpvJsonProperty $asmdef 'precompiledReferences'))
+            if ($precompiled.Count -gt 0) { [void]$errors.Add("Scenario asmdef cannot reference precompiled assemblies: $($assembly.path)") }
+            $override = Get-UpvJsonProperty $asmdef 'overrideReferences'
+            if ($null -ne $override -and [bool]$override) { [void]$errors.Add("Scenario asmdef cannot override references: $($assembly.path)") }
+            $includePlatforms = [string[]]@((Get-UpvJsonProperty $asmdef 'includePlatforms'))
+            if ($includePlatforms -contains 'Editor') { [void]$errors.Add("Scenario asmdef cannot be Editor-only: $($assembly.path)") }
+        }
+
+        $canonical = foreach ($file in @($files | Sort-Object -Property path)) {
+            "F|$($script:UpvrUtf8NoBom.GetByteCount([string]$file.path))|$($file.path)|$($file.length)|$($file.sha256)"
+        }
+        $result.files = $files
+        $result.fileCount = $files.Count
+        $result.treeSha256 = Get-UpvTextSha256 -Text ([string]::Join([char]10, [string[]]@($canonical)))
+    } catch {
+        [void]$errors.Add($_.Exception.Message)
+    }
+    $result.errors = @($errors)
+    $result.accepted = $errors.Count -eq 0
+    return [pscustomobject]$result
+}
+
+# Parses a Player scenario receipt and verifies its manifest-owned evidence files.
+function Get-UpvrPlayerScenarioReceiptAssessment {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][object]$Manifest,
+        [Parameter(Mandatory = $true)][string]$ExpectedSessionToken,
+        [Parameter(Mandatory = $true)][string]$ScreenshotRoot
+    )
+
+    $result = [ordered]@{
+        exists = $false
+        sha256 = $null
+        schemaVersion = $null
+        sessionTokenMatched = $false
+        scenarioId = $null
+        scenarioIdMatched = $false
+        runStarted = $false
+        runFinished = $false
+        result = $null
+        activeScene = $null
+        sceneMatched = $false
+        elapsedSeconds = $null
+        exception = $null
+        assertions = @()
+        captures = @()
+        assertionIdsMatched = $false
+        captureIdsMatched = $false
+        assertionsPassed = $false
+        capturesPresent = $false
+        missingCaptureIds = @()
+        accepted = $false
+        errors = @()
+    }
+    $errors = New-Object System.Collections.ArrayList
+    $missingCaptures = New-Object System.Collections.ArrayList
+    try {
+        if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw 'Player scenario receipt is missing.' }
+        $result.exists = $true
+        $result.sha256 = Get-UpvFileSha256 -Path $Path
+        $document = Read-UpvJsonFile -Path $Path
+        $contract = Test-UpvExactJsonProperties -InputObject $document -RequiredNames @(
+            'schemaVersion', 'sessionToken', 'scenarioId', 'runStarted', 'runFinished', 'result',
+            'activeScene', 'elapsedSeconds', 'exception', 'assertions', 'captures'
+        ) -Context 'Player scenario receipt'
+        foreach ($contractError in @($contract.errors)) { [void]$errors.Add($contractError) }
+        foreach ($property in @('schemaVersion', 'scenarioId', 'result', 'activeScene', 'elapsedSeconds', 'exception')) { $result[$property] = $document.$property }
+        $result.runStarted = [bool]$document.runStarted
+        $result.runFinished = [bool]$document.runFinished
+        $result.sessionTokenMatched = [string]$document.sessionToken -ceq $ExpectedSessionToken
+        $result.scenarioIdMatched = [string]$result.scenarioId -ceq [string]$Manifest.scenarioId
+        $expectedScenes = [string[]]@($Manifest.expectedScenes)
+        $normalizedActive = ([string]$result.activeScene).Replace('\', '/')
+        $result.sceneMatched = @($expectedScenes | Where-Object {
+            $normalizedExpected = ([string]$_).Replace('\', '/')
+            $normalizedExpected -ceq $normalizedActive -or [System.IO.Path]::GetFileNameWithoutExtension($normalizedExpected) -ceq [System.IO.Path]::GetFileNameWithoutExtension($normalizedActive)
+        }).Count -gt 0
+        if ($result.schemaVersion -cne '1.0.0') { [void]$errors.Add('Scenario receipt schemaVersion must be 1.0.0.') }
+        if (-not $result.sessionTokenMatched) { [void]$errors.Add('Scenario receipt session token does not match.') }
+        if (-not $result.scenarioIdMatched) { [void]$errors.Add('Scenario receipt scenarioId does not match the manifest.') }
+        if (-not $result.runStarted -or -not $result.runFinished) { [void]$errors.Add('Scenario receipt does not prove a complete run.') }
+        if (-not $result.sceneMatched) { [void]$errors.Add('Scenario receipt active scene does not match the manifest.') }
+        if ([double]$result.elapsedSeconds -lt 0 -or [double]$result.elapsedSeconds -gt ([double]$Manifest.timeoutSeconds + 5.0)) { [void]$errors.Add('Scenario receipt elapsed time is invalid or exceeds the manifest limit.') }
+
+        $assertions = @($document.assertions)
+        $assertionIds = New-Object System.Collections.ArrayList
+        $assertionObjects = New-Object System.Collections.ArrayList
+        foreach ($assertion in $assertions) {
+            $itemContract = Test-UpvExactJsonProperties -InputObject $assertion -RequiredNames @('id', 'passed', 'detail') -Context 'Scenario assertion'
+            foreach ($itemError in @($itemContract.errors)) { [void]$errors.Add($itemError) }
+            [void]$assertionIds.Add([string]$assertion.id)
+            [void]$assertionObjects.Add([ordered]@{ id = [string]$assertion.id; passed = [bool]$assertion.passed; detail = [string]$assertion.detail })
+        }
+        $result.assertionIdsMatched = Test-UpvExactStringSet -Expected ([string[]]@($Manifest.expectedAssertionIds)) -Actual ([string[]]@($assertionIds))
+        if (-not $result.assertionIdsMatched) { [void]$errors.Add('Scenario assertion IDs do not exactly match the manifest.') }
+        $result.assertions = @($assertionObjects)
+        $result.assertionsPassed = $assertions.Count -gt 0 -and @($assertionObjects | Where-Object { -not [bool]$_.passed }).Count -eq 0
+
+        $normalizedScreenshotRoot = Get-UpvNormalizedPath -Path $ScreenshotRoot
+        if ($null -ne (Get-UpvReparsePointOnPath -Path $normalizedScreenshotRoot)) { throw 'Scenario screenshot root traverses a reparse point.' }
+        $captureIds = New-Object System.Collections.ArrayList
+        $captureObjects = New-Object System.Collections.ArrayList
+        foreach ($capture in @($document.captures)) {
+            $itemContract = Test-UpvExactJsonProperties -InputObject $capture -RequiredNames @('id', 'path', 'byteLength', 'sha256') -Context 'Scenario capture'
+            foreach ($itemError in @($itemContract.errors)) { [void]$errors.Add($itemError) }
+            $id = [string]$capture.id
+            [void]$captureIds.Add($id)
+            $capturePath = Get-UpvNormalizedPath -Path ([string]$capture.path)
+            $expectedCapturePath = Get-UpvNormalizedPath -Path (Join-Path $normalizedScreenshotRoot ($id + '.png'))
+            $pathAccepted = (Test-UpvPathWithinRoot -Path $capturePath -Root $normalizedScreenshotRoot) -and $capturePath.Equals($expectedCapturePath, $script:UpvPathComparison) -and $null -eq (Get-UpvReparsePointOnPath -Path $capturePath)
+            $exists = $pathAccepted -and (Test-Path -LiteralPath $capturePath -PathType Leaf)
+            $actualLength = if ($exists) { [long](Get-Item -LiteralPath $capturePath -Force).Length } else { 0L }
+            $actualHash = if ($exists -and $actualLength -gt 0) { Get-UpvFileSha256 -Path $capturePath } else { $null }
+            $identityMatched = $exists -and $actualLength -gt 0 -and [string]$capture.sha256 -match '^[0-9a-f]{64}$' -and $actualLength -eq [long]$capture.byteLength -and $actualHash -ceq [string]$capture.sha256
+            if (-not $identityMatched) { [void]$missingCaptures.Add($id); [void]$errors.Add("Capture file evidence is missing or mismatched: $id") }
+            [void]$captureObjects.Add([ordered]@{
+                id = $id; path = $capturePath; exists = $exists; byteLength = $actualLength
+                sha256 = $actualHash; identityMatched = $identityMatched
+            })
+        }
+        $result.captureIdsMatched = Test-UpvExactStringSet -Expected ([string[]]@($Manifest.expectedCaptureIds)) -Actual ([string[]]@($captureIds))
+        if (-not $result.captureIdsMatched) { [void]$errors.Add('Scenario capture IDs do not exactly match the manifest.') }
+        foreach ($expectedId in [string[]]@($Manifest.expectedCaptureIds)) {
+            if ([string[]]@($captureIds) -cnotcontains $expectedId) { [void]$missingCaptures.Add($expectedId) }
+        }
+        $result.captures = @($captureObjects)
+        $result.capturesPresent = $missingCaptures.Count -eq 0
+        if ([string]$result.result -cne $(if ($result.assertionsPassed -and $result.captureIdsMatched -and $result.capturesPresent) { 'PASSED' } else { 'FAILED' })) {
+            [void]$errors.Add('Scenario receipt result does not agree with its assertion and capture evidence.')
+        }
+    } catch {
+        [void]$errors.Add($_.Exception.Message)
+    }
+    $result.missingCaptureIds = [string[]]@($missingCaptures | Sort-Object -Unique)
+    $result.errors = @($errors)
+    $result.accepted = $errors.Count -eq 0 -and $result.assertionsPassed -and $result.capturesPresent
+    return [pscustomobject]$result
+}
