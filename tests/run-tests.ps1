@@ -333,6 +333,15 @@ Write-UpvrFixtureText -Path (Join-Path $moduleFixtureRoot 'Variations\win64_play
 $dualBackendModule = Get-UpvrWindowsStandaloneModuleIdentity -UnityExecutablePath $moduleFixtureUnity
 Assert-UpvrTrue -Condition ($dualBackendModule.il2cppAvailable -and @($dualBackendModule.il2cppVariationPaths).Count -eq 1) -Message 'The exact Windows x64 non-development IL2CPP variation must be detected.'
 
+$longTreeRoot = Join-Path $sessionRoot 'long-build-tree'
+$longTreeDirectory = Join-Path $longTreeRoot (('segment-' + ('a' * 40)) + '\' + ('segment-' + ('b' * 40)) + '\' + ('segment-' + ('c' * 40)))
+$longTreeFile = Join-Path $longTreeDirectory (('generated-' + ('d' * 90)) + '.cpp')
+Assert-UpvrTrue -Condition ($longTreeFile.Length -ge 260) -Message 'The long-path fixture must cross the legacy Windows MAX_PATH boundary.'
+[void][System.IO.Directory]::CreateDirectory((Get-UpvrExtendedIoPath -Path $longTreeDirectory))
+[void][System.IO.File]::WriteAllText((Get-UpvrExtendedIoPath -Path $longTreeFile), 'long path fixture', $script:Utf8NoBom)
+$longTreeSnapshot = Get-UpvrTreeSnapshot -Root $longTreeRoot
+Assert-UpvrTrue -Condition ($longTreeSnapshot.fileCount -eq 1 -and [string]$longTreeSnapshot.files[0].sha256 -match '^[0-9a-f]{64}$') -Message 'Build-tree hashing must support generated IL2CPP files beyond the legacy MAX_PATH boundary.'
+
 $nunitCases = @(
     [pscustomobject]@{ Name='pass'; Total=1; Passed=1; Failed=0; Skipped=0; Inconclusive=0; Result='Passed'; Class='PASSED' },
     [pscustomobject]@{ Name='fail'; Total=1; Passed=0; Failed=1; Skipped=0; Inconclusive=0; Result='Failed'; Class='FAILED' },
@@ -479,7 +488,7 @@ Assert-UpvrEqual -Actual $compatibilityErrors.Count -Expected 0 -Message 'Compat
 $monoCompatibility = Get-UpvrCompatibilityAssessment -RegistryPath $compatibilityRegistry -UnityVersion '6000.0.69f1' -TestFrameworkVersion '1.6.0' -ScriptingBackend Mono
 Assert-UpvrTrue -Condition ($monoCompatibility.approved -and $null -eq $monoCompatibility.toolchainIdentitySha256) -Message 'Mono compatibility must be approved without an external native toolchain identity.'
 $il2cppCompatibility = Get-UpvrCompatibilityAssessment -RegistryPath $compatibilityRegistry -UnityVersion '6000.0.69f1' -TestFrameworkVersion '1.6.0' -ScriptingBackend IL2CPP
-Assert-UpvrTrue -Condition (-not $il2cppCompatibility.entryFound -and -not $il2cppCompatibility.approved) -Message 'An IL2CPP tuple without completed real-Unity approval must remain absent and fail closed.'
+Assert-UpvrTrue -Condition ($il2cppCompatibility.approved -and [string]$il2cppCompatibility.toolchainIdentitySha256 -match '^[0-9a-f]{64}$') -Message 'An approved real-Unity IL2CPP tuple must pin one exact external native toolchain identity.'
 $il2cppRegistryFixture = Join-Path $sessionRoot 'il2cpp-compatibility-fixture.json'
 $il2cppRegistryDocument = [ordered]@{
     schemaVersion = '1.1.0'
@@ -499,6 +508,10 @@ Assert-UpvrTrue -Condition ($approvedIl2cppFixture.approved -and [string]$approv
 
 $blockedResult = Invoke-UpvrRunnerFixture -Arguments @('-Mode','SCENARIO_TEST_PLAYER','-ProjectRoot','E:\does-not-exist','-ArtifactsRoot',(Join-Path $sessionRoot 'blocked-artifacts'))
 Assert-UpvrEqual -Actual $blockedResult.finalStatus -Expected 'VERIFICATION_BLOCKED' -Message 'A missing scenario bundle and project must fail closed.'
+Assert-UpvrTrue -Condition (
+    [string]$blockedResult.componentVersion -ceq (Get-Content (Join-Path $repositoryRoot 'VERSION') -Raw).Trim() -and
+    [string]$blockedResult.verifierVersion -ceq (Get-Content (Join-Path $skillRoot 'VERSION') -Raw).Trim()
+) -Message 'Public result, repository, and Skill versions must remain exactly aligned.'
 $resultSchemaErrors = @(Invoke-JsonSchemaValidation -Instance $blockedResult -SchemaPath $schema)
 Assert-UpvrEqual -Actual $resultSchemaErrors.Count -Expected 0 -Message 'Blocked production result schema validation'
 

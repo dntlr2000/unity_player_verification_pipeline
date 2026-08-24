@@ -66,8 +66,8 @@ $ProgressPreference = 'SilentlyContinue'
 
 $script:Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $script:SchemaVersion = '1.0.0'
-$script:ComponentVersion = '0.3.0-rc.1'
-$script:VerifierVersion = '0.3.0-rc.1'
+$script:ComponentVersion = '0.3.0'
+$script:VerifierVersion = '0.3.0'
 $script:ExpectedDoctorSchemaVersion = '1.1.0'
 $script:ExpectedDoctorScannerVersion = '0.2.1'
 $script:SkillRoot = Split-Path -Parent $PSScriptRoot

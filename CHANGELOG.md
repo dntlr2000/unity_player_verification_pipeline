@@ -1,11 +1,12 @@
 # Changelog
 
-## 0.3.0-rc.1 - 2026-08-24
+## 0.3.0 - 2026-08-24
 
 - Add isolated non-development `INSTRUMENTED_STANDALONE` builds with fixed source infrastructure, source-only scenarios, BuildReport and build receipts, Player-side assertions, and PNG identity evidence.
 - Add explicit `PREBUILT_STANDALONE` verification. Receipt-backed builds can reach `PLAYER_VERIFIED`; receipt-free opaque executables are capped at `PLAYER_LAUNCH_VERIFIED` after a responsive 10-second window observation.
-- Approve the complete P3 Mono matrix for all three supported Unity editors. Keep IL2CPP tuples absent until Windows x64 IL2CPP Build Support is installed and the full native-toolchain matrix passes.
+- Approve complete P3 Mono and IL2CPP matrices for all three supported Unity editors, with exact Windows Support module and native toolchain identities.
 - Require an exact Windows x64 non-development IL2CPP variation instead of treating the editor's shared `Data/il2cpp` directory as Player Build Support.
+- Hash generated IL2CPP build files through extended-length Windows paths so the full build-tree contract remains valid beyond legacy `MAX_PATH`.
 - Add full-tree prebuilt mutation detection, fixed Player arguments, separate Editor/Player Job Object evidence, and P3 real-Unity acceptance automation.
 
 ## 0.2.0 - 2026-08-23

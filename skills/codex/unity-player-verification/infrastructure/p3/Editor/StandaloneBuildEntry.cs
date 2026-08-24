@@ -295,11 +295,26 @@ namespace UnityPlayerVerification
         /// <summary>Computes a lowercase SHA-256 digest for one build file.</summary>
         private static string GetFileSha256(string path)
         {
-            using (var stream = File.OpenRead(path))
+            using (var stream = File.OpenRead(GetExtendedPath(path)))
             using (var algorithm = SHA256.Create())
             {
                 return string.Concat(algorithm.ComputeHash(stream).Select(value => value.ToString("x2")));
             }
+        }
+
+        /// <summary>Converts one absolute Windows path to an extended-length System.IO path.</summary>
+        private static string GetExtendedPath(string path)
+        {
+            var fullPath = Path.GetFullPath(path);
+            if (fullPath.StartsWith(@"\\?\", StringComparison.Ordinal))
+            {
+                return fullPath;
+            }
+            if (fullPath.StartsWith(@"\\", StringComparison.Ordinal))
+            {
+                return @"\\?\UNC\" + fullPath.Substring(2);
+            }
+            return @"\\?\" + fullPath;
         }
 
         /// <summary>Computes a lowercase SHA-256 digest for canonical UTF-8 text.</summary>

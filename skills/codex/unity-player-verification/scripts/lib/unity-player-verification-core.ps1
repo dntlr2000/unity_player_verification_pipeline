@@ -11,6 +11,34 @@ function Test-UpvrCDrivePath {
     return [string]::Equals([System.IO.Path]::GetPathRoot($normalized), 'C:\', [System.StringComparison]::OrdinalIgnoreCase)
 }
 
+# Converts one absolute Windows path to the extended-length form used by System.IO.
+function Get-UpvrExtendedIoPath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $normalized = Get-UpvNormalizedPath -Path $Path
+    if ($normalized.StartsWith('\\?\', [System.StringComparison]::Ordinal)) { return $normalized }
+    if ($normalized.StartsWith('\\', [System.StringComparison]::Ordinal)) {
+        return '\\?\UNC\' + $normalized.Substring(2)
+    }
+    return '\\?\' + $normalized
+}
+
+# Computes a lowercase SHA-256 digest without the legacy Windows MAX_PATH limit.
+function Get-UpvrFileSha256 {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $stream = $null
+    $algorithm = $null
+    try {
+        $stream = [System.IO.File]::OpenRead((Get-UpvrExtendedIoPath -Path $Path))
+        $algorithm = [System.Security.Cryptography.SHA256]::Create()
+        return ([System.BitConverter]::ToString($algorithm.ComputeHash($stream))).Replace('-', '').ToLowerInvariant()
+    } finally {
+        if ($null -ne $algorithm) { $algorithm.Dispose() }
+        if ($null -ne $stream) { $stream.Dispose() }
+    }
+}
+
 # Creates a deterministic, reparse-safe inventory and tree digest for one directory.
 function Get-UpvrTreeSnapshot {
     param(
@@ -55,7 +83,7 @@ function Get-UpvrTreeSnapshot {
                 $files.Add($relative, [pscustomobject][ordered]@{
                     path = $relative
                     length = [long]$entry.Length
-                    sha256 = Get-UpvFileSha256 -Path $entry.FullName
+                    sha256 = Get-UpvrFileSha256 -Path $entry.FullName
                 })
             }
         }
