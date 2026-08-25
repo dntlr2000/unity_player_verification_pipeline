@@ -938,15 +938,20 @@ function Get-UpvrPlayerScenarioReceiptAssessment {
         }
         $result.captures = @($captureObjects)
         $result.capturesPresent = $missingCaptures.Count -eq 0
-        if ([string]$result.result -cne $(if ($result.assertionsPassed -and $result.captureIdsMatched -and $result.capturesPresent) { 'PASSED' } else { 'FAILED' })) {
-            [void]$errors.Add('Scenario receipt result does not agree with its assertion and capture evidence.')
+        $expectedReceiptResult = if (
+            $result.assertionsPassed -and $result.captureIdsMatched -and $result.capturesPresent -and
+            [string]::IsNullOrWhiteSpace([string]$result.exception)
+        ) { 'PASSED' } else { 'FAILED' }
+        if ([string]$result.result -cne $expectedReceiptResult) {
+            [void]$errors.Add('Scenario receipt result does not agree with its execution, assertion, and capture evidence.')
         }
     } catch {
         [void]$errors.Add($_.Exception.Message)
     }
     $result.missingCaptureIds = [string[]]@($missingCaptures | Sort-Object -Unique)
     $result.errors = @($errors)
-    $result.accepted = $errors.Count -eq 0 -and $result.assertionsPassed -and $result.capturesPresent
+    $result.accepted = $errors.Count -eq 0 -and $result.assertionsPassed -and $result.capturesPresent -and
+        [string]$result.result -ceq 'PASSED' -and [string]::IsNullOrWhiteSpace([string]$result.exception)
     return [pscustomobject]$result
 }
 

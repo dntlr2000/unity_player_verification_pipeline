@@ -267,6 +267,17 @@ $scenarioReceipt = [ordered]@{
 Write-UpvrFixtureText -Path $scenarioReceiptPath -Text (ConvertTo-Json $scenarioReceipt -Depth 10 -Compress)
 $scenarioReceiptAssessment = Get-UpvrPlayerScenarioReceiptAssessment -Path $scenarioReceiptPath -Manifest $scenarioAssessment -ExpectedSessionToken 'scenario-token' -ScreenshotRoot $screenshotRoot
 Assert-UpvrTrue -Condition $scenarioReceiptAssessment.accepted -Message ('Matching scenario receipt and PNG must pass: ' + [string]::Join(' ', [string[]]@($scenarioReceiptAssessment.errors)))
+$scenarioReceipt.result = 'FAILED'
+$scenarioReceipt.exception = 'System.InvalidOperationException: retained nested fixture exception'
+Write-UpvrFixtureText -Path $scenarioReceiptPath -Text (ConvertTo-Json $scenarioReceipt -Depth 10 -Compress)
+$failedScenarioReceiptAssessment = Get-UpvrPlayerScenarioReceiptAssessment -Path $scenarioReceiptPath -Manifest $scenarioAssessment -ExpectedSessionToken 'scenario-token' -ScreenshotRoot $screenshotRoot
+Assert-UpvrTrue -Condition (
+    -not $failedScenarioReceiptAssessment.accepted -and
+    $failedScenarioReceiptAssessment.assertionsPassed -and
+    $failedScenarioReceiptAssessment.capturesPresent -and
+    $failedScenarioReceiptAssessment.errors.Count -eq 0 -and
+    [string]$failedScenarioReceiptAssessment.result -ceq 'FAILED'
+) -Message 'A complete exception-backed FAILED receipt must be structurally consistent without becoming positive evidence.'
 [System.IO.File]::Delete($capturePath)
 $missingCaptureAssessment = Get-UpvrPlayerScenarioReceiptAssessment -Path $scenarioReceiptPath -Manifest $scenarioAssessment -ExpectedSessionToken 'scenario-token' -ScreenshotRoot $screenshotRoot
 Assert-UpvrTrue -Condition (-not $missingCaptureAssessment.accepted -and $missingCaptureAssessment.missingCaptureIds -contains 'frame') -Message 'A requested missing PNG must block scenario evidence.'

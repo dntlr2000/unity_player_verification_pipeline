@@ -7,7 +7,7 @@ description: "Run approved Unity Windows Test Player, source-only Player scenari
 
 Use the bundled PowerShell entrypoint as the sole source of dynamic Player verification truth. It preserves the source project, accepts only exact approved Unity/Test Framework/Windows Support identities, controls spawned processes, and requires mode-specific receipts before making a positive claim.
 
-Component `0.3.0` enables all four modes. Test Player modes remain sealed to Mono; instrumented Standalone mode accepts only exact approved Mono or IL2CPP tuples.
+Component `0.3.1` enables all four modes. Test Player modes remain sealed to Mono; instrumented Standalone mode accepts only exact approved Mono or IL2CPP tuples. The Standalone runtime directly traverses nested scenario coroutines so their exceptions produce bounded failure receipts instead of escaping to Unity's coroutine scheduler.
 
 ## Invocation policy
 

@@ -129,10 +129,14 @@ namespace Upvr.P3.Acceptance
     /// <summary>Runs deterministic P3 runtime branches from one approved binary.</summary>
     public sealed class AcceptanceScenario : IPlayerVerificationScenario
     {
-        /// <summary>Emits success, assertion, crash, or timeout evidence selected by the acceptance environment.</summary>
+        /// <summary>Emits success, assertion, exception, crash, or timeout evidence selected by the acceptance environment.</summary>
         public IEnumerator Execute(PlayerVerificationContext context)
         {
             var acceptanceCase = Environment.GetEnvironmentVariable("UPVR_P3_ACCEPTANCE_CASE") ?? "success";
+            if (string.Equals(acceptanceCase, "top-level-exception", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("Intentional top-level scenario exception.");
+            }
             if (string.Equals(acceptanceCase, "crash", StringComparison.Ordinal))
             {
                 Debug.LogError("UPVR_ACCEPTANCE_PLAYER_CRASH");
@@ -150,6 +154,21 @@ namespace Upvr.P3.Acceptance
             var passed = !string.Equals(acceptanceCase, "assertion-failure", StringComparison.Ordinal);
             context.RecordAssertion("state-ready", passed, passed ? "Standalone Player is running." : "Intentional assertion failure.");
             yield return context.CapturePng("frame");
+            if (string.Equals(acceptanceCase, "nested-exception", StringComparison.Ordinal))
+            {
+                yield return ThrowNestedException();
+            }
+            if (string.Equals(acceptanceCase, "nested-wait-timeout", StringComparison.Ordinal))
+            {
+                yield return context.WaitUntil(() => false, 1f);
+            }
+        }
+
+        /// <summary>Throws after one nested frame so the Standalone runner must retain the exception boundary.</summary>
+        private static IEnumerator ThrowNestedException()
+        {
+            yield return null;
+            throw new InvalidOperationException("Intentional nested scenario exception.");
         }
     }
 }
@@ -178,6 +197,69 @@ function Invoke-UpvrP3Runner {
     return $result
 }
 
+# Requires exception cases to retain a FAILED receipt and exit before the external process timeout.
+function Assert-UpvrP3CoroutineFailureEvidence {
+    param(
+        [Parameter(Mandatory = $true)][object]$Result,
+        [Parameter(Mandatory = $true)][string]$CaseName,
+        [Parameter(Mandatory = $true)][int]$ExternalTimeoutSeconds
+    )
+
+    if ($CaseName -notin @('top-level-exception','nested-exception','nested-wait-timeout')) { return }
+    $receiptPath = [string]$Result.artifacts.scenarioReceiptPath
+    if (-not (Test-Path -LiteralPath $receiptPath -PathType Leaf)) { throw "$CaseName did not emit a scenario failure receipt." }
+    $receipt = Get-Content -LiteralPath $receiptPath -Raw | ConvertFrom-Json -ErrorAction Stop
+    if (-not [bool]$receipt.runFinished -or [string]$receipt.result -cne 'FAILED') { throw "$CaseName receipt is not a completed FAILED result." }
+    if ([bool]$Result.playerProcess.timedOut) { throw "$CaseName reached the external Player timeout instead of exiting from the runtime receipt path." }
+    if ([long]$Result.playerProcess.exitCode -ne 1) { throw "$CaseName Player exit code must be 1 after a retained failure receipt." }
+    $promptExitLimitMilliseconds = [long]([Math]::Min([Math]::Max(2, $ExternalTimeoutSeconds - 1), 30) * 1000)
+    if ([long]$Result.playerProcess.elapsedMilliseconds -ge $promptExitLimitMilliseconds) { throw "$CaseName Player did not exit promptly after writing its receipt." }
+
+    if ($CaseName -eq 'top-level-exception') {
+        if ([string]$receipt.exception -notmatch 'Intentional top-level scenario exception') { throw 'Top-level exception detail was not retained.' }
+        return
+    }
+
+    if (@($receipt.assertions).Count -ne 1 -or [string]$receipt.assertions[0].id -cne 'state-ready') { throw "$CaseName did not retain its recorded assertion." }
+    if (@($receipt.captures).Count -ne 1 -or [string]$receipt.captures[0].id -cne 'frame') { throw "$CaseName did not retain its recorded capture." }
+    $expectedExceptionPattern = if ($CaseName -eq 'nested-exception') { 'Intentional nested scenario exception' } else { 'TimeoutException' }
+    if ([string]$receipt.exception -notmatch $expectedExceptionPattern) { throw "$CaseName exception detail was not retained." }
+}
+
+# Requires the Editor build and Player Job Objects to prove that their complete process trees exited.
+function Assert-UpvrP3ProcessCleanupEvidence {
+    param(
+        [Parameter(Mandatory = $true)][object]$Result,
+        [Parameter(Mandatory = $true)][string]$CaseLabel
+    )
+
+    $playerProcess = $Result.processControl.standaloneRun
+    if (
+        -not [bool]$playerProcess.jobObjectCreated -or
+        -not [bool]$playerProcess.killOnJobCloseConfigured -or
+        -not [bool]$playerProcess.processAssignedToJob -or
+        -not [bool]$playerProcess.rootProcessExited -or
+        -not [bool]$playerProcess.processTreeExitVerified -or
+        [long]$playerProcess.activeProcessCountAfterWait -ne 0
+    ) {
+        throw "$CaseLabel did not prove complete Player process-tree cleanup."
+    }
+
+    if ([string]$Result.input.mode -ceq 'INSTRUMENTED_STANDALONE') {
+        $editorProcess = $Result.processControl.editorBuild
+        if (
+            -not [bool]$editorProcess.jobObjectCreated -or
+            -not [bool]$editorProcess.killOnJobCloseConfigured -or
+            -not [bool]$editorProcess.processAssignedToJob -or
+            -not [bool]$editorProcess.rootProcessExited -or
+            -not [bool]$editorProcess.processTreeExitVerified -or
+            [long]$editorProcess.activeProcessCountAfterWait -ne 0
+        ) {
+            throw "$CaseLabel did not prove complete Unity Editor build process-tree cleanup."
+        }
+    }
+}
+
 # Records the stable acceptance fields for one P3 execution.
 function New-UpvrP3AcceptanceRecord {
     param(
@@ -185,13 +267,21 @@ function New-UpvrP3AcceptanceRecord {
         [Parameter(Mandatory = $true)][string]$Backend,
         [Parameter(Mandatory = $true)][string]$CaseName,
         [Parameter(Mandatory = $true)][string]$ExpectedStatus,
-        [Parameter(Mandatory = $true)][object]$Result
+        [Parameter(Mandatory = $true)][object]$Result,
+        [Parameter(Mandatory = $true)][object]$SourceResult
     )
 
     return [pscustomobject][ordered]@{
         unityVersion=$Configuration.unityVersion; testFrameworkVersion=$Configuration.testFrameworkVersion
         scriptingBackend=$Backend; caseName=$CaseName; expectedStatus=$ExpectedStatus; finalStatus=$Result.finalStatus
         resultPath=$Result.artifacts.resultPath; buildReceiptPath=$Result.artifacts.buildReceiptPath
+        scenarioReceiptPath=$Result.artifacts.scenarioReceiptPath; playerExitCode=$Result.playerProcess.exitCode
+        playerTimedOut=$Result.playerProcess.timedOut; playerElapsedMilliseconds=$Result.playerProcess.elapsedMilliseconds
+        playerJobObjectCreated=$Result.processControl.standaloneRun.jobObjectCreated
+        playerAssignedToJob=$Result.processControl.standaloneRun.processAssignedToJob
+        playerRootProcessExited=$Result.processControl.standaloneRun.rootProcessExited
+        playerProcessTreeExitVerified=$Result.processControl.standaloneRun.processTreeExitVerified
+        playerActiveProcessCountAfterWait=$Result.processControl.standaloneRun.activeProcessCountAfterWait
         buildTreeSha256=$Result.build.tree.treeSha256; executableSha256=$Result.build.executableSha256
         unityExecutableSha256=$Result.unity.executableSha256
         windowsModuleTreeSha256=$Result.compatibility.windowsStandaloneModule.treeSha256
@@ -204,6 +294,10 @@ function New-UpvrP3AcceptanceRecord {
         prebuiltStatus=$Result.verification.prebuiltIdentity.status; originalIntegrity=$Result.originalProjectIntegrity.status
         gitIntegrity=$Result.gitMetadataIntegrity.status; blockerCodes=@($Result.blockers | ForEach-Object { $_.code })
         failureCodes=@($Result.failures | ForEach-Object { $_.code })
+        sourceOriginalIntegrity=$SourceResult.originalProjectIntegrity.status
+        sourceGitIntegrity=$SourceResult.gitMetadataIntegrity.status
+        sourceBeforeTreeSha256=$SourceResult.originalProjectIntegrity.beforeTreeSha256
+        sourceAfterTreeSha256=$SourceResult.originalProjectIntegrity.afterTreeSha256
     }
 }
 
@@ -216,6 +310,9 @@ $backends = @('Mono','IL2CPP')
 $runtimeCases = @(
     [pscustomobject]@{ name='success'; expectedStatus='PLAYER_VERIFIED'; acceptanceValue=$null },
     [pscustomobject]@{ name='assertion-failure'; expectedStatus='PLAYER_FAILED'; acceptanceValue='assertion-failure' },
+    [pscustomobject]@{ name='top-level-exception'; expectedStatus='VERIFICATION_BLOCKED'; acceptanceValue='top-level-exception' },
+    [pscustomobject]@{ name='nested-exception'; expectedStatus='PLAYER_FAILED'; acceptanceValue='nested-exception' },
+    [pscustomobject]@{ name='nested-wait-timeout'; expectedStatus='VERIFICATION_BLOCKED'; acceptanceValue='nested-wait-timeout' },
     [pscustomobject]@{ name='crash'; expectedStatus='PLAYER_FAILED'; acceptanceValue='crash' },
     [pscustomobject]@{ name='timeout'; expectedStatus='VERIFICATION_BLOCKED'; acceptanceValue='timeout' },
     [pscustomobject]@{ name='opaque-launch'; expectedStatus='PLAYER_LAUNCH_VERIFIED'; acceptanceValue=$null },
@@ -244,7 +341,8 @@ try {
             Write-Host "Starting real Unity P3 build and success run: $($configuration.unityVersion)/$backend"
             $buildResult = Invoke-UpvrP3Runner -Arguments $buildArguments -ExpectedStatus 'PLAYER_VERIFIED' -CaseLabel "$($configuration.unityVersion)/$backend/success"
             if ($buildResult.originalProjectIntegrity.status -cne 'UNCHANGED' -or $buildResult.gitMetadataIntegrity.status -notin @('UNCHANGED','NOT_PRESENT')) { throw "P3 source integrity failed for $($configuration.unityVersion)/$backend." }
-            if ($null -eq $CaseNames -or $CaseNames.Count -eq 0 -or 'success' -in $CaseNames) { [void]$results.Add((New-UpvrP3AcceptanceRecord $configuration $backend 'success' 'PLAYER_VERIFIED' $buildResult)) }
+            Assert-UpvrP3ProcessCleanupEvidence -Result $buildResult -CaseLabel "$($configuration.unityVersion)/$backend/success"
+            if ($null -eq $CaseNames -or $CaseNames.Count -eq 0 -or 'success' -in $CaseNames) { [void]$results.Add((New-UpvrP3AcceptanceRecord $configuration $backend 'success' 'PLAYER_VERIFIED' $buildResult $buildResult)) }
 
             $buildRoot = Split-Path -Parent ([string]$buildResult.build.executablePath)
             $playerExecutable = [string]$buildResult.build.executablePath
@@ -265,7 +363,8 @@ try {
                     } finally {
                         if (Test-Path -LiteralPath $tamperPath -PathType Leaf) { [System.IO.File]::Delete($tamperPath) }
                     }
-                    [void]$results.Add((New-UpvrP3AcceptanceRecord $configuration $backend $case.name $case.expectedStatus $caseResult))
+                    Assert-UpvrP3ProcessCleanupEvidence -Result $caseResult -CaseLabel "$($configuration.unityVersion)/$backend/$($case.name)"
+                    [void]$results.Add((New-UpvrP3AcceptanceRecord $configuration $backend $case.name $case.expectedStatus $caseResult $buildResult))
                     continue
                 } else {
                     [Environment]::SetEnvironmentVariable('UPVR_P3_ACCEPTANCE_CASE', [string]$case.acceptanceValue, 'Process')
@@ -273,7 +372,9 @@ try {
                 }
                 Write-Host "Starting real Unity P3 prebuilt run: $($configuration.unityVersion)/$backend/$($case.name)"
                 $caseResult = Invoke-UpvrP3Runner -Arguments $arguments -ExpectedStatus $case.expectedStatus -CaseLabel "$($configuration.unityVersion)/$backend/$($case.name)"
-                [void]$results.Add((New-UpvrP3AcceptanceRecord $configuration $backend $case.name $case.expectedStatus $caseResult))
+                Assert-UpvrP3CoroutineFailureEvidence -Result $caseResult -CaseName $case.name -ExternalTimeoutSeconds $RunTimeoutSeconds
+                Assert-UpvrP3ProcessCleanupEvidence -Result $caseResult -CaseLabel "$($configuration.unityVersion)/$backend/$($case.name)"
+                [void]$results.Add((New-UpvrP3AcceptanceRecord $configuration $backend $case.name $case.expectedStatus $caseResult $buildResult))
             }
         }
         $projectAfter = Get-StableUnityCopySetFingerprint -ProjectRoot $projectRoot

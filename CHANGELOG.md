@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.1 - 2026-08-26
+
+- Traverse every nested Standalone scenario `IEnumerator` inside one runtime exception boundary, including nested `PlayerVerificationContext.WaitUntil` timeouts.
+- Retain recorded assertions and captures in an atomic `FAILED` scenario receipt, then request immediate nonzero Player termination.
+- Treat an exception-backed `FAILED` receipt as structurally consistent when its retained assertion/capture evidence is complete, without promoting it to positive evidence.
+- Add real-Unity acceptance branches for top-level exceptions, nested exceptions, nested wait timeouts, retained failure evidence, prompt exit, and unchanged success behavior.
+
 ## 0.3.0 - 2026-08-24
 
 - Add isolated non-development `INSTRUMENTED_STANDALONE` builds with fixed source infrastructure, source-only scenarios, BuildReport and build receipts, Player-side assertions, and PNG identity evidence.

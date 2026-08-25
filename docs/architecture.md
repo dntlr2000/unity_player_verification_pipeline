@@ -28,6 +28,8 @@ P3 reuses the regular runtime Harness but replaces the Test Runner entry with a 
 
 Backend availability is derived from the selected editor's Windows Support `Variations` tree. A shared editor `Data/il2cpp` directory is not sufficient evidence of Windows IL2CPP Build Support. Release `0.3.0` contains exact approved Mono and IL2CPP tuples for all three supported Unity editors. Generated IL2CPP files are hashed through extended-length Windows paths so full-tree identity remains deterministic beyond legacy `MAX_PATH`.
 
+Release `0.3.1` hardens only the instrumented Standalone runtime. Its runner expands nested `IEnumerator` frames itself, calls every nested `MoveNext()` and `Current` inside one exception boundary, writes the partial assertion/capture snapshot into an atomic failure receipt, and exits nonzero without waiting for the external process timeout. Compatibility tuples and the public result schema are unchanged.
+
 Receipt-backed prebuilt execution binds the retained scenario identity to a fresh session token and requires a new runtime receipt. Receipt-free prebuilt execution does not trust or infer gameplay state. It records the explicit EXE and build-tree identity, applies only the fixed windowed/log arguments, requires a continuously responsive window for at least 10 seconds, requests `CloseMainWindow`, and uses the Job Object to guarantee a zero-process end state. Runtime changes to the supplied build tree block either verdict.
 
 Instrumented source and scenarios run with the caller's Windows permissions. The pipeline is an integrity and evidence boundary, not a hostile-code sandbox, CI attestation, code-signing system, or proof that an instrumented binary equals a production release binary.

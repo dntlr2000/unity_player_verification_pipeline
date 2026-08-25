@@ -4,7 +4,9 @@ The Skill is intentionally explicit-only. It is not an automatic continuation of
 
 Use `TEST_PLAYER` for existing PlayMode tests, `SCENARIO_TEST_PLAYER` for a reviewed source-only Player scenario, `INSTRUMENTED_STANDALONE` for a pipeline-built standalone scenario, and `PREBUILT_STANDALONE` only for a user-selected existing build root and executable.
 
-Release `0.3.0` enables all four modes. In either scenario mode, do not pass `TestFilter`, `TestCategory`, or `AssemblyNames`. Keep the bundle outside the Unity project and include only `manifest.json`, `.asmdef`, and `.cs`. Scenario assemblies reference `UnityPlayerVerification.Harness` and implement `IPlayerVerificationScenario.Execute(PlayerVerificationContext): IEnumerator`.
+Release `0.3.1` enables all four modes. In either scenario mode, do not pass `TestFilter`, `TestCategory`, or `AssemblyNames`. Keep the bundle outside the Unity project and include only `manifest.json`, `.asmdef`, and `.cs`. Scenario assemblies reference `UnityPlayerVerification.Harness` and implement `IPlayerVerificationScenario.Execute(PlayerVerificationContext): IEnumerator`.
+
+The P3 Standalone runner directly traverses nested `IEnumerator` values. Exceptions from a nested scenario coroutine or `PlayerVerificationContext.WaitUntil` therefore produce an atomic `FAILED` receipt with all evidence recorded before the exception, followed by a nonzero Player exit. A failed receipt with missing manifest-owned evidence remains fail-closed and cannot become `PLAYER_VERIFIED`.
 
 `INSTRUMENTED_STANDALONE` requires `ScenarioBundlePath`. Choose `ScriptingBackend Mono`, `IL2CPP`, or `Project`; `Project` is resolved from serialized project settings before Unity opens the copy. The resolved exact Unity/Test Framework/Windows Support/backend/toolchain tuple must already be approved. The resulting build contains verifier instrumentation and is not claimed to equal a distributable production build.
 

@@ -1,5 +1,24 @@
 # P3 real-Unity acceptance
 
+## 0.3.1 patch — approved 2026-08-26
+
+The nested-coroutine hardening patch passed the complete advertised P3 matrix: three Unity versions times Mono and IL2CPP, with success, top-level exception, nested exception, and nested `WaitUntil` timeout in every combination. The retained summary is `E:\CodexValidation\unity-player-verification-v031-full-matrix-20260825\acceptance-summary.json` (SHA-256 `f2a112a773b63d63eb589c9132f8fb566d7dbdb5902fbd2d0ce379d5a1319f44`).
+
+| Unity | Test Framework | Backend | Success | Top-level exception | Nested exception | Nested wait timeout | Maximum Player time |
+| --- | --- | --- | --- | --- | --- | --- | ---: |
+| `2022.3.62f3` | `1.1.33` | Mono | `PLAYER_VERIFIED` | `VERIFICATION_BLOCKED` | `PLAYER_FAILED` | `VERIFICATION_BLOCKED` | 4.448 s |
+| `2022.3.62f3` | `1.1.33` | IL2CPP | `PLAYER_VERIFIED` | `VERIFICATION_BLOCKED` | `PLAYER_FAILED` | `VERIFICATION_BLOCKED` | 4.488 s |
+| `6000.0.69f1` | `1.6.0` | Mono | `PLAYER_VERIFIED` | `VERIFICATION_BLOCKED` | `PLAYER_FAILED` | `VERIFICATION_BLOCKED` | 5.004 s |
+| `6000.0.69f1` | `1.6.0` | IL2CPP | `PLAYER_VERIFIED` | `VERIFICATION_BLOCKED` | `PLAYER_FAILED` | `VERIFICATION_BLOCKED` | 4.245 s |
+| `6000.5.3f1` | `1.7.0` | Mono | `PLAYER_VERIFIED` | `VERIFICATION_BLOCKED` | `PLAYER_FAILED` | `VERIFICATION_BLOCKED` | 5.317 s |
+| `6000.5.3f1` | `1.7.0` | IL2CPP | `PLAYER_VERIFIED` | `VERIFICATION_BLOCKED` | `PLAYER_FAILED` | `VERIFICATION_BLOCKED` | 5.084 s |
+
+All 24 results matched their expected final status and result schema. Every one of the 18 failure cases wrote a completed atomic `FAILED` scenario receipt, exited with code 1 before the external timeout, and completed within 5.317 seconds. Nested cases retained the assertion and capture recorded before the exception.
+
+Every Player run proved Job Object creation, kill-on-close configuration, process assignment, root exit, process-tree exit, and zero active processes after the wait. Each source build reported `UNCHANGED` and identical before/after fingerprints; all 24 summary records link back to the corresponding unchanged source result. No Unity, Package Manager, instrumented Player, crash handler, or shader compiler process remained after the matrix.
+
+Before the complete matrix, a focused `6000.0.69f1 + Test Framework 1.6.0 + StandaloneWindows64/IL2CPP` run passed the same four cases at `E:\CodexValidation\upvr-v031-p3-u6000-il2cpp\acceptance-summary.json`. The project-specific CodexGame follow-up also produced `PLAYER_VERIFIED` with 11/11 assertions and 5/5 capture identities at `E:\CodexValidation\CodexGame-player-verification-v031-20260825\s-6d3a199b303f48c2a07cc006f86c09dc\result.json`; its source fingerprint, Git metadata, PlayerPrefs, LocalLow, and CrashDump safeguards were unchanged.
+
 ## Gate state — approved 2026-08-24
 
 Release candidate `0.3.0-rc.1` passed the complete Mono and IL2CPP matrix before promotion to `0.3.0`. The promotion changes only public version and release documentation; the approved runtime, schemas, compatibility tuples, infrastructure, and process contracts are unchanged.
@@ -12,6 +31,7 @@ Release candidate `0.3.0-rc.1` passed the complete Mono and IL2CPP matrix before
 | P2 | Mono scenario Test Player | 15/15 | Approved | `E:\CodexValidation\upvr-p2-v030-20260824\acceptance-summary.json` |
 | P3 | Mono Standalone | 18/18 | Approved | `E:\CodexValidation\upvr-p3m-v030-20260824\acceptance-summary.json` |
 | P3 | IL2CPP Standalone | 18/18 | Approved | `E:\CodexValidation\unity-player-verification-p3-il2cpp-final-b-20260824\acceptance-summary.json` |
+| P3 0.3.1 patch | Mono and IL2CPP Standalone | 24/24 | Approved | `E:\CodexValidation\unity-player-verification-v031-full-matrix-20260825\acceptance-summary.json` |
 
 Each P3 Unity/backend combination covered a successful receipt-backed scenario, deliberate assertion failure, crash, timeout, opaque launch-only observation, and post-build receipt/tree mismatch. All 36 P3 results matched the expected final status and retained the required source, bundle, build, process, and receipt evidence.
 

@@ -56,32 +56,59 @@ namespace UnityPlayerVerification
                 executionException = exception;
             }
 
-            while (executionException == null)
+            var executionStack = new Stack<IEnumerator>();
+            if (execution != null)
+            {
+                executionStack.Push(execution);
+            }
+
+            while (executionException == null && executionStack.Count > 0)
             {
                 object current = null;
-                bool moved;
+                var shouldYield = false;
                 try
                 {
                     if (Time.realtimeSinceStartup - started > contract.timeoutSeconds)
                     {
                         throw new TimeoutException("Scenario exceeded its manifest timeout of " + contract.timeoutSeconds + " seconds.");
                     }
-                    moved = execution.MoveNext();
-                    if (moved)
+
+                    var activeExecution = executionStack.Peek();
+                    if (!activeExecution.MoveNext())
                     {
-                        current = execution.Current;
+                        executionStack.Pop();
+                        DisposeExecution(activeExecution);
+                        continue;
                     }
+
+                    current = activeExecution.Current;
+                    var nestedExecution = current as IEnumerator;
+                    if (nestedExecution != null)
+                    {
+                        if (ContainsExecutionReference(executionStack, nestedExecution))
+                        {
+                            throw new InvalidOperationException("Scenario yielded an IEnumerator that is already active.");
+                        }
+                        executionStack.Push(nestedExecution);
+                        continue;
+                    }
+                    shouldYield = true;
                 }
                 catch (Exception exception)
                 {
                     executionException = exception;
                     break;
                 }
-                if (!moved)
+
+                if (shouldYield)
                 {
-                    break;
+                    yield return current;
                 }
-                yield return current;
+            }
+
+            if (executionException != null)
+            {
+                DisposeRemainingExecutions(executionStack);
             }
 
             var contractErrors = context.GetContractErrors();
@@ -111,8 +138,41 @@ namespace UnityPlayerVerification
                 Application.Quit(2);
                 yield break;
             }
-            yield return null;
             Application.Quit(passed ? 0 : 1);
+            yield break;
+        }
+
+        /// <summary>Checks active coroutine frames by reference so a self-yield cannot spin forever in one Player frame.</summary>
+        private static bool ContainsExecutionReference(IEnumerable<IEnumerator> executions, IEnumerator candidate)
+        {
+            return executions.Any(execution => ReferenceEquals(execution, candidate));
+        }
+
+        /// <summary>Disposes a completed coroutine frame so compiler-generated finally blocks run deterministically.</summary>
+        private static void DisposeExecution(IEnumerator execution)
+        {
+            var disposable = execution as IDisposable;
+            if (disposable != null)
+            {
+                disposable.Dispose();
+            }
+        }
+
+        /// <summary>Disposes every active coroutine frame after a scenario failure without replacing its original exception.</summary>
+        private static void DisposeRemainingExecutions(Stack<IEnumerator> executions)
+        {
+            while (executions.Count > 0)
+            {
+                var execution = executions.Pop();
+                try
+                {
+                    DisposeExecution(execution);
+                }
+                catch (Exception exception)
+                {
+                    Debug.LogWarning("UPVR_STANDALONE_SCENARIO_DISPOSE_WARNING " + exception);
+                }
+            }
         }
 
         /// <summary>Finds exactly one concrete scenario implementation in the built Player.</summary>
@@ -159,12 +219,29 @@ namespace UnityPlayerVerification
         {
             Directory.CreateDirectory(Path.GetDirectoryName(path));
             var temporaryPath = path + ".tmp";
-            File.WriteAllText(temporaryPath, content);
-            if (File.Exists(path))
+            try
             {
-                File.Delete(path);
+                if (File.Exists(temporaryPath))
+                {
+                    File.Delete(temporaryPath);
+                }
+                File.WriteAllText(temporaryPath, content);
+                if (File.Exists(path))
+                {
+                    File.Replace(temporaryPath, path, null);
+                }
+                else
+                {
+                    File.Move(temporaryPath, path);
+                }
             }
-            File.Move(temporaryPath, path);
+            finally
+            {
+                if (File.Exists(temporaryPath))
+                {
+                    File.Delete(temporaryPath);
+                }
+            }
         }
 
         /// <summary>Reads one required non-empty verifier environment value.</summary>
