@@ -1,0 +1,186 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.invalid/unity-player-compatibility-1.2.0.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "identityAlgorithms", "toolchainProfiles", "compatibilityEntries"],
+  "properties": {
+    "schemaVersion": { "const": "1.2.0" },
+    "identityAlgorithms": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["buildToolchain", "hostEnvironment", "tree", "packageTree"],
+      "properties": {
+        "buildToolchain": { "const": "upvr-il2cpp-build-toolchain-v2" },
+        "hostEnvironment": { "const": "upvr-il2cpp-host-environment-v1" },
+        "tree": { "const": "upvr-tree-relative-path-length-sha256-lf-v1" },
+        "packageTree": { "const": "upv-package-tree-relative-path-length-sha256-lf-v1" }
+      }
+    },
+    "toolchainProfiles": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/toolchainProfile" }
+    },
+    "compatibilityEntries": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/compatibilityEntry" }
+    }
+  },
+  "definitions": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "nullableSha256": { "anyOf": [{ "$ref": "#/definitions/sha256" }, { "type": "null" }] },
+    "toolIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "rootKind", "relativePath", "fileVersion", "sha256"],
+      "properties": {
+        "name": { "enum": ["cl.exe", "c1.dll", "c1xx.dll", "c2.dll", "link.exe", "lib.exe", "cvtres.exe", "msobj140.dll", "mspdb140.dll", "mspdbcore.dll", "mspdbsrv.exe", "mspdbst.dll", "mspdbcmf.exe", "rc.exe", "mt.exe"] },
+        "rootKind": { "enum": ["MSVC", "WINDOWS_SDK"] },
+        "relativePath": { "type": "string", "pattern": "^[^\\\\/].*", "minLength": 1 },
+        "fileVersion": { "type": "string" },
+        "sha256": { "$ref": "#/definitions/sha256" }
+      }
+    },
+    "treeIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "canonicalization", "directoryCount", "fileCount", "totalBytes", "treeSha256"],
+      "properties": {
+        "name": { "enum": ["msvcInclude", "msvcLibX64", "windowsSdkInclude", "windowsSdkUcrtLibX64", "windowsSdkUmLibX64"] },
+        "canonicalization": { "const": "upvr-tree-relative-path-length-sha256-lf-v1" },
+        "directoryCount": { "type": "integer", "minimum": 0 },
+        "fileCount": { "type": "integer", "minimum": 1 },
+        "totalBytes": { "type": "integer", "minimum": 1 },
+        "treeSha256": { "$ref": "#/definitions/sha256" }
+      }
+    },
+    "buildToolchainIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "identitySha256", "hostArchitecture", "targetArchitecture", "msvcVersion", "windowsSdkVersion", "tools", "trees"],
+      "properties": {
+        "algorithm": { "const": "upvr-il2cpp-build-toolchain-v2" },
+        "identitySha256": { "$ref": "#/definitions/sha256" },
+        "hostArchitecture": { "const": "x64" },
+        "targetArchitecture": { "const": "x64" },
+        "msvcVersion": { "type": "string", "minLength": 1 },
+        "windowsSdkVersion": { "type": "string", "pattern": "^10\\.0\\.[0-9]+\\.[0-9]+$" },
+        "tools": { "type": "array", "minItems": 15, "maxItems": 15, "items": { "$ref": "#/definitions/toolIdentity" } },
+        "trees": { "type": "array", "minItems": 5, "maxItems": 5, "items": { "$ref": "#/definitions/treeIdentity" } }
+      }
+    },
+    "discoveryTool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "fileVersion", "sha256"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "fileVersion": { "type": "string" },
+        "sha256": { "$ref": "#/definitions/sha256" }
+      }
+    },
+    "hostEnvironmentIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "identitySha256", "visualStudioInstanceId", "visualStudioVersion", "visualStudioProductId", "visualStudioChannelId", "visualStudioPath", "installationState", "isComplete", "isLaunchable", "isPrerelease", "isRebootRequired", "requiredComponentIds", "discoveryTool"],
+      "properties": {
+        "algorithm": { "const": "upvr-il2cpp-host-environment-v1" },
+        "identitySha256": { "$ref": "#/definitions/sha256" },
+        "visualStudioInstanceId": { "type": "string", "minLength": 1 },
+        "visualStudioVersion": { "type": "string", "minLength": 1 },
+        "visualStudioProductId": { "type": "string", "minLength": 1 },
+        "visualStudioChannelId": { "type": "string", "minLength": 1 },
+        "visualStudioPath": { "type": "string", "minLength": 1 },
+        "installationState": { "type": "integer", "minimum": 0 },
+        "isComplete": { "type": "boolean" },
+        "isLaunchable": { "type": "boolean" },
+        "isPrerelease": { "type": "boolean" },
+        "isRebootRequired": { "type": "boolean" },
+        "requiredComponentIds": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+        "discoveryTool": { "$ref": "#/definitions/discoveryTool" }
+      }
+    },
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidencePath", "evidenceSha256", "approvedAtUtc"],
+      "properties": {
+        "evidencePath": { "type": ["string", "null"] },
+        "evidenceSha256": { "$ref": "#/definitions/nullableSha256" },
+        "approvedAtUtc": { "type": ["string", "null"], "format": "date-time" }
+      }
+    },
+    "toolchainProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profileId", "status", "buildToolchainIdentity", "approvalHostEnvironmentIdentity", "approval"],
+      "properties": {
+        "profileId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$" },
+        "status": { "enum": ["CANDIDATE", "APPROVED", "RETIRED"] },
+        "buildToolchainIdentity": { "$ref": "#/definitions/buildToolchainIdentity" },
+        "approvalHostEnvironmentIdentity": { "$ref": "#/definitions/hostEnvironmentIdentity" },
+        "approval": { "$ref": "#/definitions/approval" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "APPROVED" } } },
+          "then": {
+            "properties": {
+              "approval": {
+                "properties": {
+                  "evidencePath": { "type": "string", "minLength": 1 },
+                  "evidenceSha256": { "$ref": "#/definitions/sha256" },
+                  "approvedAtUtc": { "type": "string", "format": "date-time" }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "compatibilityEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unityVersion", "testFrameworkVersion", "allowedSourceKind", "registryOrigin", "unityExecutableSha256", "packageTreeSha256", "packageHashCanonicalization", "target", "scriptingBackend", "windowsModuleTreeSha256", "moduleHashCanonicalization", "unityIl2CppExecutableSha256", "unityBeeBackendExecutableSha256", "approvedToolchainProfileIds", "minimumPhase", "status", "evidencePath", "evidenceSha256"],
+      "properties": {
+        "unityVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+[abfp][0-9]+$" },
+        "testFrameworkVersion": { "type": "string", "minLength": 1 },
+        "allowedSourceKind": { "enum": ["registry", "builtin"] },
+        "registryOrigin": { "type": ["string", "null"] },
+        "unityExecutableSha256": { "$ref": "#/definitions/sha256" },
+        "packageTreeSha256": { "$ref": "#/definitions/sha256" },
+        "packageHashCanonicalization": { "const": "upv-package-tree-relative-path-length-sha256-lf-v1" },
+        "target": { "const": "StandaloneWindows64" },
+        "scriptingBackend": { "enum": ["Mono", "IL2CPP"] },
+        "windowsModuleTreeSha256": { "$ref": "#/definitions/sha256" },
+        "moduleHashCanonicalization": { "const": "upvr-tree-relative-path-length-sha256-lf-v1" },
+        "unityIl2CppExecutableSha256": { "$ref": "#/definitions/nullableSha256" },
+        "unityBeeBackendExecutableSha256": { "$ref": "#/definitions/nullableSha256" },
+        "approvedToolchainProfileIds": { "type": "array", "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$" }, "uniqueItems": true },
+        "minimumPhase": { "enum": ["P1", "P2", "P3"] },
+        "status": { "enum": ["CANDIDATE", "APPROVED", "RETIRED"] },
+        "evidencePath": { "type": "string", "minLength": 1 },
+        "evidenceSha256": { "$ref": "#/definitions/sha256" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "scriptingBackend": { "const": "IL2CPP" } } },
+          "then": {
+            "properties": {
+              "unityIl2CppExecutableSha256": { "$ref": "#/definitions/sha256" },
+              "unityBeeBackendExecutableSha256": { "$ref": "#/definitions/sha256" },
+              "approvedToolchainProfileIds": { "minItems": 1 }
+            }
+          },
+          "else": {
+            "properties": {
+              "unityIl2CppExecutableSha256": { "type": "null" },
+              "unityBeeBackendExecutableSha256": { "type": "null" },
+              "approvedToolchainProfileIds": { "maxItems": 0 }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

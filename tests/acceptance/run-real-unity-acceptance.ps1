@@ -29,7 +29,7 @@ $script:RepositoryRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent (Spli
 $script:RunnerPath = Join-Path $script:RepositoryRoot 'skills\codex\unity-player-verification\scripts\invoke-unity-player-verification.ps1'
 $script:FingerprintPath = Join-Path $script:RepositoryRoot 'skills\codex\unity-player-verification\scripts\vendor\doctor\lib\unity-project-fingerprint.ps1'
 $script:SchemaValidatorPath = Join-Path $script:RepositoryRoot 'skills\codex\unity-player-verification\scripts\vendor\shared\json-schema-validator.ps1'
-$script:ResultSchemaPath = Join-Path $script:RepositoryRoot 'schemas\unity-player-verification-result-1.0.0.schema.json'
+$script:ResultSchemaPath = Join-Path $script:RepositoryRoot 'schemas\unity-player-verification-result-1.1.0.schema.json'
 $script:AcceptanceRoot = [System.IO.Path]::GetFullPath($ArtifactsRoot).TrimEnd('\', '/')
 
 . $script:FingerprintPath

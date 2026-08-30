@@ -20,7 +20,11 @@ namespace UnityPlayerVerification
         public string overlayTreeSha256;
         public string scenarioBundleTreeSha256;
         public string windowsModuleTreeSha256;
-        public string toolchainIdentitySha256;
+        public string toolchainProfileId;
+        public string buildToolchainIdentityAlgorithm;
+        public string buildToolchainIdentitySha256;
+        public string hostEnvironmentIdentityAlgorithm;
+        public string hostEnvironmentIdentitySha256;
         public string requestedBackend;
         public string scenarioId;
         public string displayName;
@@ -67,14 +71,18 @@ namespace UnityPlayerVerification
     [Serializable]
     internal sealed class StandaloneBuildReceipt
     {
-        public string schemaVersion = "1.0.0";
+        public string schemaVersion = "1.1.0";
         public string sessionToken;
         public string originalFingerprint;
         public string overlayTreeSha256;
         public string scenarioBundleTreeSha256;
         public string unityVersion;
         public string windowsModuleTreeSha256;
-        public string toolchainIdentitySha256;
+        public string toolchainProfileId;
+        public string buildToolchainIdentityAlgorithm;
+        public string buildToolchainIdentitySha256;
+        public string hostEnvironmentIdentityAlgorithm;
+        public string hostEnvironmentIdentitySha256;
         public string scriptingBackend;
         public string[] scenes;
         public string buildOptions;
@@ -165,7 +173,11 @@ namespace UnityPlayerVerification
                 scenarioBundleTreeSha256 = contract.scenarioBundleTreeSha256,
                 unityVersion = Application.unityVersion,
                 windowsModuleTreeSha256 = contract.windowsModuleTreeSha256,
-                toolchainIdentitySha256 = contract.toolchainIdentitySha256,
+                toolchainProfileId = contract.toolchainProfileId,
+                buildToolchainIdentityAlgorithm = contract.buildToolchainIdentityAlgorithm,
+                buildToolchainIdentitySha256 = contract.buildToolchainIdentitySha256,
+                hostEnvironmentIdentityAlgorithm = contract.hostEnvironmentIdentityAlgorithm,
+                hostEnvironmentIdentitySha256 = contract.hostEnvironmentIdentitySha256,
                 scriptingBackend = backend,
                 scenes = scenes,
                 buildOptions = BuildOptions.None.ToString(),
@@ -216,6 +228,15 @@ namespace UnityPlayerVerification
                 contract.buildScenes == null || contract.expectedScenes == null || contract.expectedAssertionIds == null || contract.expectedCaptureIds == null)
             {
                 throw new BuildFailedException("Instrumented Standalone build contract is invalid.");
+            }
+            if (string.Equals(contract.requestedBackend, "IL2CPP", StringComparison.Ordinal) &&
+                (string.IsNullOrWhiteSpace(contract.toolchainProfileId) ||
+                 !string.Equals(contract.buildToolchainIdentityAlgorithm, "upvr-il2cpp-build-toolchain-v2", StringComparison.Ordinal) ||
+                 string.IsNullOrWhiteSpace(contract.buildToolchainIdentitySha256) ||
+                 !string.Equals(contract.hostEnvironmentIdentityAlgorithm, "upvr-il2cpp-host-environment-v1", StringComparison.Ordinal) ||
+                 string.IsNullOrWhiteSpace(contract.hostEnvironmentIdentitySha256)))
+            {
+                throw new BuildFailedException("IL2CPP Standalone build contract lacks split toolchain identities.");
             }
         }
 

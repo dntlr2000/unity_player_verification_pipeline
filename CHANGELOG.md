@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.0 - 2026-08-30
+
+- Split IL2CPP identity into a build-affecting toolchain identity and a separately reported Visual Studio host-environment identity.
+- Add compatibility schema `1.2.0` with reusable `CANDIDATE`, `APPROVED`, and `RETIRED` toolchain profiles and multiple approved profiles per Unity tuple.
+- Discover all Visual Studio/MSVC/Windows SDK candidates and select exactly one approved match, with optional `ToolchainProfileId` and `VisualStudioPath` disambiguation.
+- Pin compiler, linker, librarian, dependent native tools, MSVC headers/libraries, Windows SDK headers/libraries, Unity IL2CPP, and Bee identities; verify build/host identity again after the build.
+- Parse isolated Bee DAG evidence to prove the selected `cl.exe`, `lib.exe`, and `link.exe` paths were used.
+- Add result schema `1.1.0` and Standalone build receipt schema `1.1.0`; legacy receipt `1.0.0` is replay-only and cannot authorize a fresh v0.4 build.
+- Add a candidate collector and approval-matrix staging flow that cannot mutate production profiles to `APPROVED`.
+
 ## 0.3.1 - 2026-08-26
 
 - Traverse every nested Standalone scenario `IEnumerator` inside one runtime exception boundary, including nested `PlayerVerificationContext.WaitUntil` timeouts.

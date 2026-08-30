@@ -22,7 +22,11 @@ param(
 
     [Parameter()]
     [AllowNull()]
-    [string[]]$CaseNames
+    [string[]]$CaseNames,
+
+    [Parameter()]
+    [AllowNull()]
+    [string]$CandidateProfilePath
 )
 
 Set-StrictMode -Version Latest
@@ -33,11 +37,15 @@ $env:TMP = 'E:\CodexTemp'
 
 $script:Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $script:RepositoryRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent (Split-Path -Parent $PSScriptRoot))).TrimEnd('\', '/')
-$script:RunnerPath = Join-Path $script:RepositoryRoot 'skills\codex\unity-player-verification\scripts\invoke-unity-player-verification.ps1'
+$script:SourceSkillRoot = Join-Path $script:RepositoryRoot 'skills\codex\unity-player-verification'
+$script:RunnerPath = Join-Path $script:SourceSkillRoot 'scripts\invoke-unity-player-verification.ps1'
 $script:FingerprintPath = Join-Path $script:RepositoryRoot 'skills\codex\unity-player-verification\scripts\vendor\doctor\lib\unity-project-fingerprint.ps1'
 $script:SchemaValidatorPath = Join-Path $script:RepositoryRoot 'skills\codex\unity-player-verification\scripts\vendor\shared\json-schema-validator.ps1'
-$script:ResultSchemaPath = Join-Path $script:RepositoryRoot 'schemas\unity-player-verification-result-1.0.0.schema.json'
+$script:ResultSchemaPath = Join-Path $script:RepositoryRoot 'schemas\unity-player-verification-result-1.1.0.schema.json'
 $script:AcceptanceRoot = [System.IO.Path]::GetFullPath($ArtifactsRoot).TrimEnd('\', '/')
+$script:AcceptanceToolchainProfileId = $null
+$script:AcceptanceVisualStudioPath = $null
+$script:CandidateEvidence = $null
 
 . $script:FingerprintPath
 . $script:SchemaValidatorPath
@@ -58,6 +66,50 @@ function Write-UpvrP3AcceptanceText {
     $parent = Split-Path -Parent $Path
     if (-not [string]::IsNullOrWhiteSpace($parent)) { [void][System.IO.Directory]::CreateDirectory($parent) }
     [void][System.IO.File]::WriteAllText($Path, $Content, $script:Utf8NoBom)
+}
+
+# Creates an external Skill copy whose one reviewed candidate is temporarily eligible only for acceptance execution.
+function Initialize-UpvrP3CandidateAcceptanceRunner {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $candidatePath = [System.IO.Path]::GetFullPath($Path)
+    if (-not (Test-Path -LiteralPath $candidatePath -PathType Leaf)) { throw 'CandidateProfilePath is missing.' }
+    if ([string]::Equals([System.IO.Path]::GetPathRoot($candidatePath), 'C:\', [System.StringComparison]::OrdinalIgnoreCase)) { throw 'CandidateProfilePath must not use the C drive.' }
+    $candidateSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $candidatePath).Hash.ToLowerInvariant()
+    $candidateDocument = Get-Content -LiteralPath $candidatePath -Raw | ConvertFrom-Json -ErrorAction Stop
+    if ([string]$candidateDocument.schemaVersion -cne '1.0.0' -or [string]$candidateDocument.kind -cne 'UPVR_IL2CPP_TOOLCHAIN_CANDIDATE' -or [string]$candidateDocument.profile.status -cne 'CANDIDATE') {
+        throw 'CandidateProfilePath is not an unapproved UPVR IL2CPP toolchain candidate.'
+    }
+
+    $stageParent = Join-Path $script:AcceptanceRoot ('staged-skill-' + [guid]::NewGuid().ToString('N'))
+    [void][System.IO.Directory]::CreateDirectory($stageParent)
+    Copy-Item -LiteralPath $script:SourceSkillRoot -Destination $stageParent -Recurse -Force
+    $stagedSkillRoot = Join-Path $stageParent 'unity-player-verification'
+    $registryPath = Join-Path $stagedSkillRoot 'config\unity-player-compatibility.json'
+    $registry = Get-Content -LiteralPath $registryPath -Raw | ConvertFrom-Json -ErrorAction Stop
+    $profileId = [string]$candidateDocument.profile.profileId
+    $profiles = @($registry.toolchainProfiles | Where-Object { [string]$_.profileId -ceq $profileId })
+    if ($profiles.Count -ne 1) { throw "Staged registry does not contain candidate profile '$profileId' exactly once." }
+    $profile = $profiles[0]
+    if ([string]$profile.buildToolchainIdentity.identitySha256 -cne [string]$candidateDocument.profile.buildToolchainIdentity.identitySha256 -or
+        [string]$profile.approvalHostEnvironmentIdentity.identitySha256 -cne [string]$candidateDocument.profile.approvalHostEnvironmentIdentity.identitySha256) {
+        throw 'Candidate manifest does not exactly match the staged registry candidate.'
+    }
+    $profile.status = 'APPROVED'
+    $profile.approval.evidencePath = $candidatePath
+    $profile.approval.evidenceSha256 = $candidateSha256
+    $profile.approval.approvedAtUtc = [DateTime]::UtcNow.ToString('o')
+    Write-UpvrP3AcceptanceText -Path $registryPath -Content (ConvertTo-Json $registry -Depth 40)
+    $script:RunnerPath = Join-Path $stagedSkillRoot 'scripts\invoke-unity-player-verification.ps1'
+    $script:AcceptanceToolchainProfileId = $profileId
+    $script:AcceptanceVisualStudioPath = [string]$candidateDocument.profile.approvalHostEnvironmentIdentity.visualStudioPath
+    $script:CandidateEvidence = [pscustomobject][ordered]@{
+        candidatePath=$candidatePath; candidateSha256=$candidateSha256; profileId=$profileId
+        buildToolchainIdentitySha256=[string]$candidateDocument.profile.buildToolchainIdentity.identitySha256
+        hostEnvironmentIdentitySha256=[string]$candidateDocument.profile.approvalHostEnvironmentIdentity.identitySha256
+        stagedSkillRoot=$stagedSkillRoot; stagedRegistryPath=$registryPath
+        stagedRegistrySha256=(Get-FileHash -Algorithm SHA256 -LiteralPath $registryPath).Hash.ToLowerInvariant()
+    }
 }
 
 # Creates one minimal immutable project with an enabled Standalone build Scene.
@@ -282,14 +334,23 @@ function New-UpvrP3AcceptanceRecord {
         playerRootProcessExited=$Result.processControl.standaloneRun.rootProcessExited
         playerProcessTreeExitVerified=$Result.processControl.standaloneRun.processTreeExitVerified
         playerActiveProcessCountAfterWait=$Result.processControl.standaloneRun.activeProcessCountAfterWait
-        buildTreeSha256=$Result.build.tree.treeSha256; executableSha256=$Result.build.executableSha256
-        unityExecutableSha256=$Result.unity.executableSha256
-        windowsModuleTreeSha256=$Result.compatibility.windowsStandaloneModule.treeSha256
-        toolchainIdentitySha256=$Result.compatibility.toolchain.identitySha256
-        visualStudioVersion=$Result.compatibility.toolchain.visualStudioVersion
-        msvcVersion=$Result.compatibility.toolchain.msvcVersion
-        windowsSdkVersion=$Result.compatibility.toolchain.windowsSdkVersion
-        toolchainTools=@($Result.compatibility.toolchain.tools)
+        buildTreeSha256=$SourceResult.build.tree.treeSha256; executableSha256=$SourceResult.build.executableSha256
+        unityExecutableSha256=$SourceResult.unity.executableSha256
+        windowsModuleTreeSha256=$SourceResult.compatibility.windowsStandaloneModule.treeSha256
+        toolchainIdentitySha256=$SourceResult.compatibility.toolchain.identitySha256
+        toolchainProfileId=$SourceResult.compatibility.toolchain.selectedProfileId
+        buildToolchainIdentityAlgorithm=$(if ($Backend -eq 'IL2CPP') { $SourceResult.compatibility.toolchain.buildToolchainIdentity.algorithm } else { $null })
+        buildToolchainIdentitySha256=$(if ($Backend -eq 'IL2CPP') { $SourceResult.compatibility.toolchain.buildToolchainIdentity.identitySha256 } else { $null })
+        hostEnvironmentIdentityAlgorithm=$(if ($Backend -eq 'IL2CPP') { $SourceResult.compatibility.toolchain.hostEnvironmentIdentity.algorithm } else { $null })
+        hostEnvironmentIdentitySha256=$(if ($Backend -eq 'IL2CPP') { $SourceResult.compatibility.toolchain.hostEnvironmentIdentity.identitySha256 } else { $null })
+        buildIdentityUnchanged=$SourceResult.compatibility.toolchain.buildIdentityUnchanged
+        hostIdentityUnchanged=$SourceResult.compatibility.toolchain.hostIdentityUnchanged
+        beeObservationAccepted=$SourceResult.compatibility.toolchain.beeObservation.accepted
+        beeEvidencePath=$SourceResult.artifacts.beeToolchainEvidencePath
+        visualStudioVersion=$SourceResult.compatibility.toolchain.visualStudioVersion
+        msvcVersion=$SourceResult.compatibility.toolchain.msvcVersion
+        windowsSdkVersion=$SourceResult.compatibility.toolchain.windowsSdkVersion
+        toolchainTools=@($SourceResult.compatibility.toolchain.tools)
         scenarioStatus=$Result.verification.scenarioBehavior.status; launchStatus=$Result.verification.standaloneLaunch.status
         prebuiltStatus=$Result.verification.prebuiltIdentity.status; originalIntegrity=$Result.originalProjectIntegrity.status
         gitIntegrity=$Result.gitMetadataIntegrity.status; blockerCodes=@($Result.blockers | ForEach-Object { $_.code })
@@ -318,6 +379,10 @@ $runtimeCases = @(
     [pscustomobject]@{ name='opaque-launch'; expectedStatus='PLAYER_LAUNCH_VERIFIED'; acceptanceValue=$null },
     [pscustomobject]@{ name='receipt-mismatch'; expectedStatus='VERIFICATION_BLOCKED'; acceptanceValue=$null }
 )
+$il2cppSelected = $null -eq $ScriptingBackends -or $ScriptingBackends.Count -eq 0 -or 'IL2CPP' -in $ScriptingBackends
+if ($il2cppSelected -and -not [string]::IsNullOrWhiteSpace($CandidateProfilePath)) {
+    Initialize-UpvrP3CandidateAcceptanceRunner -Path $CandidateProfilePath
+}
 $bundlePath = New-UpvrP3AcceptanceBundle
 $bundleBefore = Get-StableUnityCopySetFingerprint -ProjectRoot $bundlePath
 $results = New-Object System.Collections.ArrayList
@@ -338,6 +403,9 @@ try {
                 '-ArtifactsRoot',$buildArtifactRoot,'-BuildTimeoutSeconds',$BuildTimeoutSeconds,'-RunTimeoutSeconds',$RunTimeoutSeconds,
                 '-ScenarioBundlePath',$bundlePath,'-ScriptingBackend',$backend
             )
+            if ($backend -eq 'IL2CPP' -and -not [string]::IsNullOrWhiteSpace($script:AcceptanceToolchainProfileId)) {
+                $buildArguments += @('-ToolchainProfileId',$script:AcceptanceToolchainProfileId,'-VisualStudioPath',$script:AcceptanceVisualStudioPath)
+            }
             Write-Host "Starting real Unity P3 build and success run: $($configuration.unityVersion)/$backend"
             $buildResult = Invoke-UpvrP3Runner -Arguments $buildArguments -ExpectedStatus 'PLAYER_VERIFIED' -CaseLabel "$($configuration.unityVersion)/$backend/success"
             if ($buildResult.originalProjectIntegrity.status -cne 'UNCHANGED' -or $buildResult.gitMetadataIntegrity.status -notin @('UNCHANGED','NOT_PRESENT')) { throw "P3 source integrity failed for $($configuration.unityVersion)/$backend." }
@@ -363,7 +431,7 @@ try {
                     } finally {
                         if (Test-Path -LiteralPath $tamperPath -PathType Leaf) { [System.IO.File]::Delete($tamperPath) }
                     }
-                    Assert-UpvrP3ProcessCleanupEvidence -Result $caseResult -CaseLabel "$($configuration.unityVersion)/$backend/$($case.name)"
+                    if ([bool]$caseResult.processControl.standaloneRun.processStarted) { throw 'Receipt mismatch must be rejected before the Player starts.' }
                     [void]$results.Add((New-UpvrP3AcceptanceRecord $configuration $backend $case.name $case.expectedStatus $caseResult $buildResult))
                     continue
                 } else {
@@ -392,10 +460,10 @@ $selectedBackendCount = @($backends | Where-Object { $null -eq $ScriptingBackend
 $selectedCaseCount = @($runtimeCases | Where-Object { $null -eq $CaseNames -or $CaseNames.Count -eq 0 -or $_.name -in $CaseNames }).Count
 $expectedCount = $selectedConfigurationCount * $selectedBackendCount * $selectedCaseCount
 $summary = [ordered]@{
-    schemaVersion='1.0.0'; phase='P3'; acceptanceStatus=$(if ($results.Count -eq $expectedCount) { 'APPROVED' } else { 'INCOMPLETE' })
+    schemaVersion='1.1.0'; phase='P3'; acceptanceStatus=$(if ($results.Count -eq $expectedCount) { 'APPROVAL_ELIGIBLE' } else { 'INCOMPLETE' })
     generatedAtUtc=[DateTime]::UtcNow.ToString('o'); artifactRoot=$script:AcceptanceRoot
     buildCombinationCount=$selectedConfigurationCount * $selectedBackendCount
-    expectedCaseCount=$expectedCount; caseCount=$results.Count; results=@($results)
+    expectedCaseCount=$expectedCount; caseCount=$results.Count; candidateEvidence=$script:CandidateEvidence; results=@($results)
 }
 $summaryPath = Join-Path $script:AcceptanceRoot 'acceptance-summary.json'
 Write-UpvrP3AcceptanceText -Path $summaryPath -Content (ConvertTo-Json $summary -Depth 30)

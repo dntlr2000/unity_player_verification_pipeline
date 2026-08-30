@@ -57,6 +57,14 @@ param(
     [string]$ScriptingBackend = 'Mono',
 
     [Parameter()]
+    [AllowNull()]
+    [string]$ToolchainProfileId,
+
+    [Parameter()]
+    [AllowNull()]
+    [string]$VisualStudioPath,
+
+    [Parameter()]
     [switch]$Pretty
 )
 
@@ -65,9 +73,9 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
 $script:Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-$script:SchemaVersion = '1.0.0'
-$script:ComponentVersion = '0.3.1'
-$script:VerifierVersion = '0.3.1'
+$script:SchemaVersion = '1.1.0'
+$script:ComponentVersion = '0.4.0'
+$script:VerifierVersion = '0.4.0'
 $script:ExpectedDoctorSchemaVersion = '1.1.0'
 $script:ExpectedDoctorScannerVersion = '0.2.1'
 $script:SkillRoot = Split-Path -Parent $PSScriptRoot
@@ -104,6 +112,10 @@ $script:EffectiveScriptingBackend = $ScriptingBackend
 $script:StandaloneBuildReceiptAssessment = $null
 $script:PrebuiltIdentityAssessment = $null
 $script:PrebuiltTreeBefore = $null
+$script:SelectedToolchainCandidate = $null
+$script:SelectedToolchainProfile = $null
+$script:ToolchainDriftAssessment = $null
+$script:BeeToolchainObservation = $null
 
 [Console]::OutputEncoding = $script:Utf8NoBom
 
@@ -161,6 +173,8 @@ function New-UpvrResult {
             playerExecutable = $PlayerExecutable
             buildReceiptPath = $BuildReceiptPath
             scriptingBackend = if ($Mode -eq 'PREBUILT_STANDALONE') { $null } else { $ScriptingBackend }
+            toolchainProfileId = $ToolchainProfileId
+            visualStudioPath = $VisualStudioPath
         }
         doctor = [ordered]@{
             sourcePath = $null; sha256 = $null; schemaVersion = $null; scannerVersion = $null
@@ -177,7 +191,8 @@ function New-UpvrResult {
             packageHashCanonicalization = $null; windowsModuleTreeSha256 = $null
             moduleHashCanonicalization = $null; toolchainIdentitySha256 = $null
             visualStudioVersion = $null; msvcVersion = $null; windowsSdkVersion = $null
-            evidencePath = $null; approved = $false
+            unityIl2CppExecutableSha256 = $null; unityBeeBackendExecutableSha256 = $null
+            approvedToolchainProfileIds = @(); evidencePath = $null; evidenceSha256 = $null; approved = $false
             provenance = [ordered]@{ accepted = $false; errors = @(); sourceEvidence = @() }
             postRunProvenance = [ordered]@{ accepted = $false; errors = @(); sourceEvidence = @() }
             packageIdentity = [ordered]@{ accepted = $false; errors = @(); treeSha256 = $null; expectedTreeSha256 = $null }
@@ -185,14 +200,22 @@ function New-UpvrResult {
                 root = $null; exists = $false; fileCount = 0; totalBytes = 0; treeSha256 = $null
                 expectedTreeSha256 = $null; canonicalization = $null; monoAvailable = $false
                 il2cppAvailable = $false; monoVariationPaths = @(); il2cppVariationPaths = @()
+                beeBackendPath = $null; beeBackendSha256 = $null
+                il2cppExecutablePath = $null; il2cppExecutableSha256 = $null
                 identityMatched = $false; accepted = $false; error = $null
             }
             toolchain = [ordered]@{
-                requested = $Mode -ne 'PREBUILT_STANDALONE' -and $ScriptingBackend -eq 'IL2CPP'; visualStudioVersion = $null; msvcVersion = $null
-                windowsSdkVersion = $null; tools = @(); identitySha256 = $null
-                expectedVisualStudioVersion = $null; expectedMsvcVersion = $null
-                expectedWindowsSdkVersion = $null; expectedIdentitySha256 = $null
-                identityMatched = $false; accepted = $false; errors = @()
+                requested = $Mode -ne 'PREBUILT_STANDALONE' -and $ScriptingBackend -eq 'IL2CPP'
+                requestedProfileId = $ToolchainProfileId; requestedVisualStudioPath = $VisualStudioPath
+                candidateCount = 0; candidates = @(); rejectedCandidates = @(); matches = @()
+                selectedProfileId = $null; selectedProfileStatus = $null
+                visualStudioVersion = $null; visualStudioPath = $null; msvcVersion = $null
+                windowsSdkVersion = $null; tools = @(); trees = @(); identitySha256 = $null
+                buildToolchainIdentity = $null; hostEnvironmentIdentity = $null
+                approvalHostEnvironmentIdentitySha256 = $null; hostEnvironmentMatchesApproval = $null
+                preBuild = $null; postBuild = $null; buildIdentityUnchanged = $null; hostIdentityUnchanged = $null
+                beeObservation = [ordered]@{ algorithm=$null; sourceFiles=@(); observedTools=@(); requiredToolNames=@(); missingToolNames=@(); mismatchedTools=@(); accepted=$false; errors=@() }
+                expectedIdentitySha256 = $null; identityMatched = $false; accepted = $false; errors = @()
             }
         }
         unity = [ordered]@{
@@ -206,6 +229,7 @@ function New-UpvrResult {
         selection = [ordered]@{
             testFilter = $TestFilter; testCategory = $TestCategory; assemblyNames = $AssemblyNames
             scenarioBundlePath = $ScenarioBundlePath; scenarioId = $null
+            toolchainProfileId = $ToolchainProfileId; visualStudioPath = $VisualStudioPath
         }
         timeouts = [ordered]@{
             buildSeconds = $BuildTimeoutSeconds; runSeconds = $RunTimeoutSeconds
@@ -298,7 +322,7 @@ function New-UpvrResult {
             runtimeNUnitPath = $null; runtimeReceiptPath = $null; playerLogPath = $null
             buildReportPath = $null; buildTreePath = $null; scenarioReceiptPath = $null
             scenarioContractPath = $null; standaloneBuildContractPath = $null; buildReceiptPath = $null
-            screenshotRoot = $null; playerStdoutPath = $null; playerStderrPath = $null
+            beeToolchainEvidencePath = $null; screenshotRoot = $null; playerStdoutPath = $null; playerStderrPath = $null
             resultPath = $null; resultWritten = $false
         }
         verificationScopes = @(
@@ -438,6 +462,7 @@ function Initialize-UpvrArtifactSession {
     $script:Result.artifacts.scenarioContractPath = Join-Path $script:SessionRoot 'scenario-contract.json'
     $script:Result.artifacts.standaloneBuildContractPath = Join-Path $script:SessionRoot 'standalone-build-contract.json'
     $script:Result.artifacts.buildReceiptPath = Join-Path $script:SessionRoot 'build-receipt.json'
+    $script:Result.artifacts.beeToolchainEvidencePath = Join-Path $script:SessionRoot 'bee-toolchain-evidence.json'
     $script:Result.artifacts.screenshotRoot = Join-Path $script:SessionRoot 'screenshots'
     $script:Result.artifacts.playerStdoutPath = Join-Path $script:SessionRoot 'player-stdout.log'
     $script:Result.artifacts.playerStderrPath = Join-Path $script:SessionRoot 'player-stderr.log'
@@ -579,6 +604,9 @@ function Resolve-UpvrEffectiveScriptingBackend {
         }
         $script:Result.compatibility.scriptingBackend = $script:EffectiveScriptingBackend
         $script:Result.compatibility.toolchain.requested = $script:EffectiveScriptingBackend -ceq 'IL2CPP'
+        if ($script:EffectiveScriptingBackend -cne 'IL2CPP' -and (
+            -not [string]::IsNullOrWhiteSpace($ToolchainProfileId) -or -not [string]::IsNullOrWhiteSpace($VisualStudioPath)
+        )) { throw 'ToolchainProfileId and VisualStudioPath are valid only when INSTRUMENTED_STANDALONE resolves to IL2CPP.' }
     } catch {
         Set-UpvrCompatibilityBlocked -Reason $_.Exception.Message
         Add-UpvrBlocker -Code 'PROJECT_BACKEND_REJECTED' -Check 'scriptingBackend' -Path $script:NormalizedProjectRoot -Message $_.Exception.Message
@@ -610,8 +638,8 @@ function Test-UpvrCompatibilityAndEditor {
             'registrySchemaVersion', 'target', 'scriptingBackend', 'entryFound', 'entryStatus', 'minimumPhase',
             'allowedSourceKind', 'registryOrigin', 'unityExecutableSha256', 'packageTreeSha256',
             'packageHashCanonicalization', 'windowsModuleTreeSha256', 'moduleHashCanonicalization',
-            'toolchainIdentitySha256', 'visualStudioVersion', 'msvcVersion', 'windowsSdkVersion',
-            'evidencePath', 'approved'
+            'unityIl2CppExecutableSha256', 'unityBeeBackendExecutableSha256', 'approvedToolchainProfileIds',
+            'evidencePath', 'evidenceSha256', 'approved'
         )) {
             $script:Result.compatibility[$property] = $script:CompatibilityAssessment.$property
         }
@@ -665,7 +693,11 @@ function Test-UpvrCompatibilityAndEditor {
         if ($script:Result.unity.executableSha256 -cne $script:CompatibilityAssessment.unityExecutableSha256) { throw 'Unity.exe hash does not match the compatibility entry.' }
 
         $module = Get-UpvrWindowsStandaloneModuleIdentity -UnityExecutablePath $path
-        foreach ($property in @('root', 'exists', 'fileCount', 'totalBytes', 'treeSha256', 'canonicalization', 'monoAvailable', 'il2cppAvailable', 'monoVariationPaths', 'il2cppVariationPaths', 'accepted', 'error')) {
+        foreach ($property in @(
+            'root', 'exists', 'fileCount', 'totalBytes', 'treeSha256', 'canonicalization', 'monoAvailable',
+            'il2cppAvailable', 'monoVariationPaths', 'il2cppVariationPaths', 'beeBackendPath',
+            'beeBackendSha256', 'il2cppExecutablePath', 'il2cppExecutableSha256', 'accepted', 'error'
+        )) {
             $script:Result.compatibility.windowsStandaloneModule[$property] = $module.$property
         }
         $script:Result.compatibility.windowsStandaloneModule.expectedTreeSha256 = $script:CompatibilityAssessment.windowsModuleTreeSha256
@@ -676,22 +708,50 @@ function Test-UpvrCompatibilityAndEditor {
         if ($script:EffectiveScriptingBackend -ceq 'IL2CPP' -and -not $module.il2cppAvailable) { throw 'The approved Unity installation lacks IL2CPP support.' }
 
         if ($script:EffectiveScriptingBackend -ceq 'IL2CPP') {
-            $toolchain = Get-UpvrIl2CppToolchainIdentity
-            foreach ($property in @('visualStudioVersion','msvcVersion','windowsSdkVersion','tools','identitySha256','accepted','errors')) {
-                $script:Result.compatibility.toolchain[$property] = $toolchain.$property
-            }
-            if (-not $toolchain.accepted) { throw ([string]::Join(' ', [string[]]@($toolchain.errors))) }
-            $script:Result.compatibility.toolchain.expectedIdentitySha256 = $script:CompatibilityAssessment.toolchainIdentitySha256
-            $script:Result.compatibility.toolchain.expectedVisualStudioVersion = $script:CompatibilityAssessment.visualStudioVersion
-            $script:Result.compatibility.toolchain.expectedMsvcVersion = $script:CompatibilityAssessment.msvcVersion
-            $script:Result.compatibility.toolchain.expectedWindowsSdkVersion = $script:CompatibilityAssessment.windowsSdkVersion
-            $script:Result.compatibility.toolchain.identityMatched = `
-                [string]$toolchain.identitySha256 -ceq [string]$script:CompatibilityAssessment.toolchainIdentitySha256 -and `
-                [string]$toolchain.visualStudioVersion -ceq [string]$script:CompatibilityAssessment.visualStudioVersion -and `
-                [string]$toolchain.msvcVersion -ceq [string]$script:CompatibilityAssessment.msvcVersion -and `
-                [string]$toolchain.windowsSdkVersion -ceq [string]$script:CompatibilityAssessment.windowsSdkVersion
-            if (-not $script:Result.compatibility.toolchain.identityMatched) { throw 'IL2CPP toolchain identity does not match the approved compatibility entry.' }
-            Add-UpvrEvidence -Check 'il2cppToolchain' -Status 'PASSED' -Source $toolchain.visualStudioPath -Detail "IL2CPP toolchain identity SHA-256 $($toolchain.identitySha256) was captured."
+            if ([string]$module.il2cppExecutableSha256 -cne [string]$script:CompatibilityAssessment.unityIl2CppExecutableSha256) { throw 'Unity il2cpp.exe hash does not match the compatibility entry.' }
+            if ([string]$module.beeBackendSha256 -cne [string]$script:CompatibilityAssessment.unityBeeBackendExecutableSha256) { throw 'Unity bee_backend.exe hash does not match the compatibility entry.' }
+            $inventory = Get-UpvrIl2CppToolchainCandidates -VisualStudioPath $VisualStudioPath
+            $script:Result.compatibility.toolchain.candidateCount = @($inventory.candidates).Count
+            $script:Result.compatibility.toolchain.candidates = @($inventory.candidates | ForEach-Object {
+                [pscustomobject][ordered]@{
+                    candidateId=$_.candidateId; visualStudioPath=$_.visualStudioPath; visualStudioInstanceId=$_.visualStudioInstanceId
+                    visualStudioVersion=$_.visualStudioVersion; msvcVersion=$_.msvcVersion; windowsSdkVersion=$_.windowsSdkVersion
+                    buildToolchainIdentityAlgorithm=$_.buildToolchainIdentity.algorithm
+                    buildToolchainIdentitySha256=$_.buildToolchainIdentity.identitySha256
+                    hostEnvironmentIdentityAlgorithm=$_.hostEnvironmentIdentity.algorithm
+                    hostEnvironmentIdentitySha256=$_.hostEnvironmentIdentity.identitySha256
+                }
+            })
+            $script:Result.compatibility.toolchain.rejectedCandidates = @($inventory.rejectedCandidates | ForEach-Object {
+                [pscustomobject][ordered]@{ visualStudioPath=$_.visualStudioPath; msvcVersion=$_.msvcVersion; windowsSdkVersion=$_.windowsSdkVersion; errors=@($_.errors) }
+            })
+            if (-not $inventory.accepted) { throw ([string]::Join(' ', [string[]]@($inventory.errors))) }
+            $selection = Select-UpvrApprovedToolchainCandidate -Candidates ([object[]]@($inventory.candidates)) -Profiles ([object[]]@($script:CompatibilityAssessment.toolchainProfiles)) -ToolchainProfileId $ToolchainProfileId -VisualStudioPath $VisualStudioPath
+            $script:Result.compatibility.toolchain.matches = @($selection.matches)
+            if (-not $selection.accepted) { throw ([string]::Join(' ', [string[]]@($selection.errors))) }
+            $script:SelectedToolchainCandidate = $selection.selectedCandidate
+            $script:SelectedToolchainProfile = $selection.selectedProfile
+            $toolchain = $script:SelectedToolchainCandidate
+            $script:Result.compatibility.toolchain.selectedProfileId = [string]$script:SelectedToolchainProfile.profileId
+            $script:Result.compatibility.toolchain.selectedProfileStatus = [string]$script:SelectedToolchainProfile.status
+            $script:Result.compatibility.toolchain.visualStudioVersion = $toolchain.visualStudioVersion
+            $script:Result.compatibility.toolchain.visualStudioPath = $toolchain.visualStudioPath
+            $script:Result.compatibility.toolchain.msvcVersion = $toolchain.msvcVersion
+            $script:Result.compatibility.toolchain.windowsSdkVersion = $toolchain.windowsSdkVersion
+            $script:Result.compatibility.toolchain.tools = @($toolchain.tools)
+            $script:Result.compatibility.toolchain.trees = @($toolchain.trees)
+            $script:Result.compatibility.toolchain.identitySha256 = $toolchain.buildToolchainIdentity.identitySha256
+            $script:Result.compatibility.toolchain.buildToolchainIdentity = $toolchain.buildToolchainIdentity
+            $script:Result.compatibility.toolchain.hostEnvironmentIdentity = $toolchain.hostEnvironmentIdentity
+            $script:Result.compatibility.toolchain.preBuild = [ordered]@{ buildToolchainIdentity=$toolchain.buildToolchainIdentity; hostEnvironmentIdentity=$toolchain.hostEnvironmentIdentity }
+            $script:Result.compatibility.toolchain.expectedIdentitySha256 = $script:SelectedToolchainProfile.buildToolchainIdentity.identitySha256
+            $script:Result.compatibility.toolchain.approvalHostEnvironmentIdentitySha256 = $script:SelectedToolchainProfile.approvalHostEnvironmentIdentity.identitySha256
+            $script:Result.compatibility.toolchain.hostEnvironmentMatchesApproval = [string]$toolchain.hostEnvironmentIdentity.identitySha256 -ceq [string]$script:SelectedToolchainProfile.approvalHostEnvironmentIdentity.identitySha256
+            $script:Result.compatibility.toolchain.identityMatched = [string]$toolchain.buildToolchainIdentity.identitySha256 -ceq [string]$script:SelectedToolchainProfile.buildToolchainIdentity.identitySha256
+            $script:Result.compatibility.toolchain.accepted = $script:Result.compatibility.toolchain.identityMatched
+            $script:Result.compatibility.toolchain.errors = @()
+            foreach ($warning in @($selection.warnings)) { Add-UpvrWarning -Code 'IL2CPP_HOST_ENVIRONMENT_DRIFT' -Check 'compatibility' -Path $toolchain.visualStudioPath -Message $warning }
+            Add-UpvrEvidence -Check 'il2cppToolchain' -Status 'PASSED' -Source $toolchain.visualStudioPath -Detail "Approved profile $($script:SelectedToolchainProfile.profileId) matched build-toolchain SHA-256 $($toolchain.buildToolchainIdentity.identitySha256)."
         } else {
             $script:Result.compatibility.toolchain.accepted = $true
             $script:Result.compatibility.toolchain.identityMatched = $true
@@ -895,14 +955,23 @@ function Add-UpvrP3ScenarioOverlay {
         Write-UpvrText -Path $script:Result.artifacts.scenarioContractPath -Content (ConvertTo-Json $runtimeContract -Depth 10 -Compress)
 
         $overlay = Get-UpvrStableTreeSnapshot -Root $reserved.path -ExcludedRelativePrefixes @('Scenario')
-        $toolchainHash = if ($script:EffectiveScriptingBackend -ceq 'IL2CPP') { [string]$script:Result.compatibility.toolchain.identitySha256 } else { $null }
+        $toolchainProfileId = if ($script:EffectiveScriptingBackend -ceq 'IL2CPP') { [string]$script:SelectedToolchainProfile.profileId } else { $null }
+        $buildToolchainAlgorithm = if ($script:EffectiveScriptingBackend -ceq 'IL2CPP') { [string]$script:SelectedToolchainCandidate.buildToolchainIdentity.algorithm } else { $null }
+        $buildToolchainHash = if ($script:EffectiveScriptingBackend -ceq 'IL2CPP') { [string]$script:SelectedToolchainCandidate.buildToolchainIdentity.identitySha256 } else { $null }
+        $hostEnvironmentAlgorithm = if ($script:EffectiveScriptingBackend -ceq 'IL2CPP') { [string]$script:SelectedToolchainCandidate.hostEnvironmentIdentity.algorithm } else { $null }
+        $hostEnvironmentHash = if ($script:EffectiveScriptingBackend -ceq 'IL2CPP') { [string]$script:SelectedToolchainCandidate.hostEnvironmentIdentity.identitySha256 } else { $null }
         $buildContract = [ordered]@{
             schemaVersion='1.0.0'; sessionToken=$script:SessionToken
             originalFingerprint=[string]$script:OriginalFingerprintBefore.treeSha256
             overlayTreeSha256=[string]$overlay.treeSha256
             scenarioBundleTreeSha256=[string]$copiedScenario.treeSha256
             windowsModuleTreeSha256=[string]$script:Result.compatibility.windowsStandaloneModule.treeSha256
-            toolchainIdentitySha256=$toolchainHash; requestedBackend=$ScriptingBackend
+            toolchainProfileId=$toolchainProfileId
+            buildToolchainIdentityAlgorithm=$buildToolchainAlgorithm
+            buildToolchainIdentitySha256=$buildToolchainHash
+            hostEnvironmentIdentityAlgorithm=$hostEnvironmentAlgorithm
+            hostEnvironmentIdentitySha256=$hostEnvironmentHash
+            requestedBackend=$ScriptingBackend
             scenarioId=$script:ScenarioAssessment.scenarioId; displayName=$script:ScenarioAssessment.displayName
             timeoutSeconds=[int]$script:ScenarioAssessment.timeoutSeconds
             buildScenes=[string[]]@($script:ScenarioAssessment.buildScenes)
@@ -1205,8 +1274,40 @@ function Set-UpvrBuildTreeEvidence {
     }
 }
 
+# Recomputes IL2CPP identities and parses isolated Bee evidence after the Editor build exits.
+function Set-UpvrIl2CppPostBuildEvidence {
+    if ($script:EffectiveScriptingBackend -cne 'IL2CPP') { return }
+    try {
+        if ($null -eq $script:SelectedToolchainCandidate -or $null -eq $script:SelectedToolchainProfile) { throw 'No approved IL2CPP toolchain selection is available for post-build verification.' }
+        $script:ToolchainDriftAssessment = Test-UpvrIl2CppToolchainDrift -SelectedCandidate $script:SelectedToolchainCandidate
+        $script:Result.compatibility.toolchain.postBuild = if ($null -eq $script:ToolchainDriftAssessment.postBuild) { $null } else {
+            [ordered]@{
+                buildToolchainIdentity=$script:ToolchainDriftAssessment.postBuild.buildToolchainIdentity
+                hostEnvironmentIdentity=$script:ToolchainDriftAssessment.postBuild.hostEnvironmentIdentity
+            }
+        }
+        $script:Result.compatibility.toolchain.buildIdentityUnchanged = [bool]$script:ToolchainDriftAssessment.buildIdentityUnchanged
+        $script:Result.compatibility.toolchain.hostIdentityUnchanged = [bool]$script:ToolchainDriftAssessment.hostIdentityUnchanged
+        if (-not $script:ToolchainDriftAssessment.accepted) { throw ([string]::Join(' ', [string[]]@($script:ToolchainDriftAssessment.errors))) }
+
+        $script:BeeToolchainObservation = Get-UpvrBeeToolchainObservation -ProjectCopyPath $script:Result.isolation.projectCopyPath -SelectedCandidate $script:SelectedToolchainCandidate
+        foreach ($property in @('algorithm','sourceFiles','observedTools','requiredToolNames','missingToolNames','mismatchedTools','accepted','errors')) {
+            $script:Result.compatibility.toolchain.beeObservation[$property] = $script:BeeToolchainObservation.$property
+        }
+        Write-UpvrText -Path $script:Result.artifacts.beeToolchainEvidencePath -Content (ConvertTo-Json $script:BeeToolchainObservation -Depth 20)
+        if (-not $script:BeeToolchainObservation.accepted) { throw ([string]::Join(' ', [string[]]@($script:BeeToolchainObservation.errors))) }
+        Add-UpvrEvidence -Check 'il2cppToolchainPostBuild' -Status 'PASSED' -Source $script:Result.artifacts.beeToolchainEvidencePath -Detail 'Pre/post identities match and isolated Bee evidence observed the selected compiler, librarian, and linker.'
+    } catch {
+        $script:Result.compatibility.toolchain.accepted = $false
+        $script:Result.compatibility.toolchain.errors = @($_.Exception.Message)
+        Set-UpvrCompatibilityBlocked -Reason $_.Exception.Message
+        Add-UpvrBlocker -Code 'IL2CPP_TOOLCHAIN_POSTBUILD_REJECTED' -Check 'compatibility' -Path $script:Result.artifacts.beeToolchainEvidencePath -Message $_.Exception.Message
+    }
+}
+
 # Cross-checks Editor compilation, BuildReport, build receipt, PE layout, and full Standalone tree identity.
 function Set-UpvrStandaloneBuildEvidence {
+    Set-UpvrIl2CppPostBuildEvidence
     $editorLog = Get-UpvEditorLogAnalysis -Path $script:Result.artifacts.editorLogPath -ExpectedUnityVersion $script:Result.compatibility.unityVersion -ExpectedProjectPath $script:Result.isolation.projectCopyPath
     foreach ($property in $editorLog.PSObject.Properties.Name) { if ($script:Result.editorLog.Contains($property)) { $script:Result.editorLog[$property] = $editorLog.$property } }
 
@@ -1262,9 +1363,14 @@ function Set-UpvrStandaloneBuildEvidence {
         -ExpectedOverlayTreeSha256 $script:Result.isolation.standaloneOverlayTreeSha256 `
         -ExpectedScenarioBundleTreeSha256 $script:Result.isolation.scenarioOverlayTreeSha256 `
         -ExpectedWindowsModuleTreeSha256 $script:Result.compatibility.windowsStandaloneModule.treeSha256 `
-        -ExpectedToolchainIdentitySha256 $(if ($script:EffectiveScriptingBackend -ceq 'IL2CPP') { $script:Result.compatibility.toolchain.identitySha256 } else { $null }) `
+        -ExpectedToolchainProfileId $(if ($script:EffectiveScriptingBackend -ceq 'IL2CPP') { $script:Result.compatibility.toolchain.selectedProfileId } else { $null }) `
+        -ExpectedBuildToolchainIdentityAlgorithm $(if ($script:EffectiveScriptingBackend -ceq 'IL2CPP') { $script:SelectedToolchainCandidate.buildToolchainIdentity.algorithm } else { $null }) `
+        -ExpectedBuildToolchainIdentitySha256 $(if ($script:EffectiveScriptingBackend -ceq 'IL2CPP') { $script:SelectedToolchainCandidate.buildToolchainIdentity.identitySha256 } else { $null }) `
+        -ExpectedHostEnvironmentIdentityAlgorithm $(if ($script:EffectiveScriptingBackend -ceq 'IL2CPP') { $script:SelectedToolchainCandidate.hostEnvironmentIdentity.algorithm } else { $null }) `
+        -ExpectedHostEnvironmentIdentitySha256 $(if ($script:EffectiveScriptingBackend -ceq 'IL2CPP') { $script:SelectedToolchainCandidate.hostEnvironmentIdentity.identitySha256 } else { $null }) `
         -ExpectedBackend $script:EffectiveScriptingBackend `
-        -CurrentTree $currentTree
+        -CurrentTree $currentTree `
+        -FreshBuild
     $script:Result.buildReceipt.resolvedPath = $script:Result.artifacts.buildReceiptPath
     $script:Result.buildReceipt.exists = [bool]$script:StandaloneBuildReceiptAssessment.exists
     $script:Result.buildReceipt.sha256 = $script:StandaloneBuildReceiptAssessment.sha256
@@ -1276,6 +1382,12 @@ function Set-UpvrStandaloneBuildEvidence {
     }
 
     $concreteBuildFailure = $editorLog.classification -eq 'FAILURE' -or ($report.exists -and [string]$report.result -ne 'Succeeded')
+    $toolchainEvidenceAccepted = $script:EffectiveScriptingBackend -cne 'IL2CPP' -or (
+        $script:Result.compatibility.toolchain.accepted -and
+        $script:Result.compatibility.toolchain.buildIdentityUnchanged -and
+        $script:Result.compatibility.toolchain.hostIdentityUnchanged -and
+        $script:Result.compatibility.toolchain.beeObservation.accepted
+    )
     if ($concreteBuildFailure) {
         $script:Result.verification.windowsPlayerBuild.status = 'VERIFIED_FAILURE'
         $script:Result.verification.windowsPlayerBuild.reason = 'Unity retained a concrete instrumented Standalone build failure.'
@@ -1285,7 +1397,7 @@ function Set-UpvrStandaloneBuildEvidence {
     } elseif (
         $report.accepted -and $script:StandaloneBuildReceiptAssessment.accepted -and
         $script:PrebuiltIdentityAssessment.accepted -and $script:Result.unity.exitCode -eq 0 -and
-        $script:Result.processControl.editorBuild.processTreeExitVerified
+        $script:Result.processControl.editorBuild.processTreeExitVerified -and $toolchainEvidenceAccepted
     ) {
         $script:Result.verification.windowsPlayerBuild.status = 'VERIFIED_SUCCESS'
         $script:Result.verification.windowsPlayerBuild.reason = 'BuildReport, PE layout, build receipt, and current full-tree identity agree.'
@@ -1297,7 +1409,7 @@ function Set-UpvrStandaloneBuildEvidence {
         $script:Result.verification.windowsPlayerBuild.reason = 'Standalone build report, receipt, PE, tree, exit, or process evidence is incomplete or inconsistent.'
         $script:Result.verification.standaloneBuild.status = 'BLOCKED'
         $script:Result.verification.standaloneBuild.reason = $script:Result.verification.windowsPlayerBuild.reason
-        $messages = @($report.errors) + @($script:StandaloneBuildReceiptAssessment.errors) + @($script:PrebuiltIdentityAssessment.errors)
+        $messages = @($report.errors) + @($script:StandaloneBuildReceiptAssessment.errors) + @($script:PrebuiltIdentityAssessment.errors) + @($script:Result.compatibility.toolchain.errors)
         Add-UpvrBlocker -Code 'INSTRUMENTED_STANDALONE_BUILD_EVIDENCE_INCOMPLETE' -Check 'standaloneBuild' -Path $script:Result.artifacts.buildReceiptPath -Message ([string]::Join(' ', [string[]]$messages))
     }
 }
@@ -1656,6 +1768,9 @@ function Initialize-UpvrPrebuiltStandalone {
         $script:Result.buildReceipt.errors = @($script:StandaloneBuildReceiptAssessment.errors)
         $script:Result.buildReceipt.identity = $script:StandaloneBuildReceiptAssessment
         if (-not $script:StandaloneBuildReceiptAssessment.accepted) { throw ([string]::Join(' ', [string[]]@($script:StandaloneBuildReceiptAssessment.errors))) }
+        if ($script:StandaloneBuildReceiptAssessment.legacy) {
+            Add-UpvrWarning -Code 'LEGACY_BUILD_RECEIPT_REPLAY' -Check 'buildReceipt' -Path $receiptPath -Message ([string]$script:StandaloneBuildReceiptAssessment.warning)
+        }
 
         $scenario = $script:StandaloneBuildReceiptAssessment.scenario
         $script:ScenarioAssessment = [pscustomobject][ordered]@{
@@ -1830,6 +1945,9 @@ try {
         if (-not $assessment.accepted) { Add-UpvrBlocker -Code 'TEST_SELECTOR_REJECTED' -Check 'selection' -Path $null -Message $assessment.error }
     }
     $selectorSupplied = -not [string]::IsNullOrWhiteSpace($TestFilter) -or -not [string]::IsNullOrWhiteSpace($TestCategory) -or -not [string]::IsNullOrWhiteSpace($AssemblyNames)
+    $toolchainConstraintSupplied = -not [string]::IsNullOrWhiteSpace($ToolchainProfileId) -or -not [string]::IsNullOrWhiteSpace($VisualStudioPath)
+    if (-not [string]::IsNullOrWhiteSpace($ToolchainProfileId) -and $ToolchainProfileId -notmatch '^[a-z0-9][a-z0-9._-]{2,127}$') { Add-UpvrBlocker -Code 'TOOLCHAIN_PROFILE_ID_REJECTED' -Check 'selection' -Path $null -Message 'ToolchainProfileId has an invalid format.' }
+    if ($Mode -ne 'INSTRUMENTED_STANDALONE' -and $toolchainConstraintSupplied) { Add-UpvrBlocker -Code 'TOOLCHAIN_CONSTRAINT_MODE_CONFLICT' -Check 'selection' -Path $VisualStudioPath -Message 'ToolchainProfileId and VisualStudioPath are accepted only by INSTRUMENTED_STANDALONE IL2CPP verification.' }
     if ($Mode -in @('SCENARIO_TEST_PLAYER','INSTRUMENTED_STANDALONE') -and $selectorSupplied) { Add-UpvrBlocker -Code 'SCENARIO_SELECTOR_CONFLICT' -Check 'selection' -Path $null -Message 'Scenario modes cannot be combined with test selection parameters; the manifest owns its execution contract.' }
     if ($Mode -in @('SCENARIO_TEST_PLAYER','INSTRUMENTED_STANDALONE') -and [string]::IsNullOrWhiteSpace($ScenarioBundlePath)) { Add-UpvrBlocker -Code 'SCENARIO_BUNDLE_REQUIRED' -Check 'selection' -Path $null -Message "$Mode requires ScenarioBundlePath." }
     if ($Mode -eq 'TEST_PLAYER' -and -not [string]::IsNullOrWhiteSpace($ScenarioBundlePath)) { Add-UpvrBlocker -Code 'TEST_PLAYER_SCENARIO_CONFLICT' -Check 'selection' -Path $ScenarioBundlePath -Message 'TEST_PLAYER cannot be combined with ScenarioBundlePath.' }

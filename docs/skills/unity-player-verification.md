@@ -4,11 +4,15 @@ The Skill is intentionally explicit-only. It is not an automatic continuation of
 
 Use `TEST_PLAYER` for existing PlayMode tests, `SCENARIO_TEST_PLAYER` for a reviewed source-only Player scenario, `INSTRUMENTED_STANDALONE` for a pipeline-built standalone scenario, and `PREBUILT_STANDALONE` only for a user-selected existing build root and executable.
 
-Release `0.3.1` enables all four modes. In either scenario mode, do not pass `TestFilter`, `TestCategory`, or `AssemblyNames`. Keep the bundle outside the Unity project and include only `manifest.json`, `.asmdef`, and `.cs`. Scenario assemblies reference `UnityPlayerVerification.Harness` and implement `IPlayerVerificationScenario.Execute(PlayerVerificationContext): IEnumerator`.
+Release `0.4.0` enables all four modes. In either scenario mode, do not pass `TestFilter`, `TestCategory`, or `AssemblyNames`. Keep the bundle outside the Unity project and include only `manifest.json`, `.asmdef`, and `.cs`. Scenario assemblies reference `UnityPlayerVerification.Harness` and implement `IPlayerVerificationScenario.Execute(PlayerVerificationContext): IEnumerator`.
 
 The P3 Standalone runner directly traverses nested `IEnumerator` values. Exceptions from a nested scenario coroutine or `PlayerVerificationContext.WaitUntil` therefore produce an atomic `FAILED` receipt with all evidence recorded before the exception, followed by a nonzero Player exit. A failed receipt with missing manifest-owned evidence remains fail-closed and cannot become `PLAYER_VERIFIED`.
 
 `INSTRUMENTED_STANDALONE` requires `ScenarioBundlePath`. Choose `ScriptingBackend Mono`, `IL2CPP`, or `Project`; `Project` is resolved from serialized project settings before Unity opens the copy. The resolved exact Unity/Test Framework/Windows Support/backend/toolchain tuple must already be approved. The resulting build contains verifier instrumentation and is not claimed to equal a distributable production build.
+
+For IL2CPP, the verifier inventories every complete Visual Studio/MSVC/Windows SDK candidate and selects exactly one candidate matching an `APPROVED` toolchain profile referenced by the Unity compatibility entry. `ToolchainProfileId` and `VisualStudioPath` are optional selection constraints for ambiguous hosts; neither can create approval. A Visual Studio product-version or installation-path change is warning-only when build-affecting bytes still match the approved profile. Tool-byte changes, candidate-only or retired-only profiles, ambiguous selection, Bee path mismatch, or any within-run identity drift block verification.
+
+Use `tests\acceptance\new-il2cpp-toolchain-candidate.ps1` to collect a read-only external candidate document. Approval requires the complete real-Unity matrix and explicit review of its summary SHA-256; production verification never promotes a candidate itself.
 
 `PREBUILT_STANDALONE` requires the exact `BuildRoot` and `PlayerExecutable` and never searches for another EXE. A matching pipeline build receipt enables a fresh receipt-backed scenario run. Without a receipt, only a responsive 10-second launch observation is attempted, so the maximum status is `PLAYER_LAUNCH_VERIFIED`. Do not combine project, scenario, selector, or Unity executable inputs with prebuilt mode.
 

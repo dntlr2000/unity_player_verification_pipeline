@@ -1,0 +1,68 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.invalid/standalone-build-receipt-1.1.0.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion", "sessionToken", "originalFingerprint", "overlayTreeSha256", "scenarioBundleTreeSha256",
+    "unityVersion", "windowsModuleTreeSha256", "toolchainProfileId", "buildToolchainIdentityAlgorithm",
+    "buildToolchainIdentitySha256", "hostEnvironmentIdentityAlgorithm", "hostEnvironmentIdentitySha256",
+    "scriptingBackend", "scenes", "buildOptions", "developmentBuild", "buildGuid", "executablePath",
+    "executableSha256", "buildRoot", "treeCanonicalization", "buildTreeSha256", "fileCount",
+    "directoryCount", "totalBytes", "scenario"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1.1.0" },
+    "sessionToken": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+    "originalFingerprint": { "$ref": "#/definitions/sha256" },
+    "overlayTreeSha256": { "$ref": "#/definitions/sha256" },
+    "scenarioBundleTreeSha256": { "$ref": "#/definitions/sha256" },
+    "unityVersion": { "type": "string", "minLength": 1 },
+    "windowsModuleTreeSha256": { "$ref": "#/definitions/sha256" },
+    "toolchainProfileId": { "type": ["string", "null"] },
+    "buildToolchainIdentityAlgorithm": { "type": ["string", "null"] },
+    "buildToolchainIdentitySha256": { "anyOf": [{ "$ref": "#/definitions/sha256" }, { "type": "null" }, { "const": "" }] },
+    "hostEnvironmentIdentityAlgorithm": { "type": ["string", "null"] },
+    "hostEnvironmentIdentitySha256": { "anyOf": [{ "$ref": "#/definitions/sha256" }, { "type": "null" }, { "const": "" }] },
+    "scriptingBackend": { "enum": ["Mono", "IL2CPP"] },
+    "scenes": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+    "buildOptions": { "const": "None" },
+    "developmentBuild": { "const": false },
+    "buildGuid": { "type": "string", "minLength": 1 },
+    "executablePath": { "type": "string", "minLength": 1 },
+    "executableSha256": { "$ref": "#/definitions/sha256" },
+    "buildRoot": { "type": "string", "minLength": 1 },
+    "treeCanonicalization": { "const": "upvr-tree-relative-path-length-sha256-lf-v1" },
+    "buildTreeSha256": { "$ref": "#/definitions/sha256" },
+    "fileCount": { "type": "integer", "minimum": 1 },
+    "directoryCount": { "type": "integer", "minimum": 1 },
+    "totalBytes": { "type": "integer", "minimum": 1 },
+    "scenario": { "type": "object" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "scriptingBackend": { "const": "IL2CPP" } } },
+      "then": {
+        "properties": {
+          "toolchainProfileId": { "type": "string", "minLength": 1 },
+          "buildToolchainIdentityAlgorithm": { "const": "upvr-il2cpp-build-toolchain-v2" },
+          "buildToolchainIdentitySha256": { "$ref": "#/definitions/sha256" },
+          "hostEnvironmentIdentityAlgorithm": { "const": "upvr-il2cpp-host-environment-v1" },
+          "hostEnvironmentIdentitySha256": { "$ref": "#/definitions/sha256" }
+        }
+      },
+      "else": {
+        "properties": {
+          "toolchainProfileId": { "enum": [null, ""] },
+          "buildToolchainIdentityAlgorithm": { "enum": [null, ""] },
+          "buildToolchainIdentitySha256": { "enum": [null, ""] },
+          "hostEnvironmentIdentityAlgorithm": { "enum": [null, ""] },
+          "hostEnvironmentIdentitySha256": { "enum": [null, ""] }
+        }
+      }
+    }
+  ],
+  "definitions": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  }
+}

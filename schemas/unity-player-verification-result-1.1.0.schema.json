@@ -1,0 +1,88 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.invalid/unity-player-verification-result-1.1.0.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion", "componentVersion", "verifierVersion", "input", "doctor", "compatibility", "unity",
+    "selection", "timeouts", "preflight", "processControl", "isolation", "build", "playerProcess", "nunit",
+    "editorLog", "playerLog", "scenario", "captures", "buildReceipt", "prebuiltIdentity",
+    "originalProjectIntegrity", "gitMetadataIntegrity", "verification", "artifacts", "verificationScopes",
+    "warnings", "failures", "blockers", "finalStatus", "evidence"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1.1.0" },
+    "componentVersion": { "type": "string" },
+    "verifierVersion": { "type": "string" },
+    "input": { "$ref": "#/definitions/object" },
+    "doctor": { "$ref": "#/definitions/object" },
+    "compatibility": { "$ref": "#/definitions/object" },
+    "unity": { "$ref": "#/definitions/object" },
+    "selection": { "$ref": "#/definitions/object" },
+    "timeouts": { "$ref": "#/definitions/object" },
+    "preflight": { "$ref": "#/definitions/object" },
+    "processControl": { "$ref": "#/definitions/object" },
+    "isolation": { "$ref": "#/definitions/object" },
+    "build": { "$ref": "#/definitions/object" },
+    "playerProcess": { "$ref": "#/definitions/object" },
+    "nunit": { "$ref": "#/definitions/object" },
+    "editorLog": { "$ref": "#/definitions/object" },
+    "playerLog": { "$ref": "#/definitions/object" },
+    "scenario": { "$ref": "#/definitions/object" },
+    "captures": { "$ref": "#/definitions/object" },
+    "buildReceipt": { "$ref": "#/definitions/object" },
+    "prebuiltIdentity": { "$ref": "#/definitions/object" },
+    "originalProjectIntegrity": { "$ref": "#/definitions/object" },
+    "gitMetadataIntegrity": { "$ref": "#/definitions/object" },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scriptCompilation", "windowsPlayerBuild", "testPlayerExecution", "playerConnection", "playerTests",
+        "scenarioBehavior", "visualEvidence", "standaloneBuild", "standaloneLaunch", "prebuiltIdentity"
+      ],
+      "properties": {
+        "scriptCompilation": { "$ref": "#/definitions/scope" },
+        "windowsPlayerBuild": { "$ref": "#/definitions/scope" },
+        "testPlayerExecution": { "$ref": "#/definitions/scope" },
+        "playerConnection": { "$ref": "#/definitions/scope" },
+        "playerTests": { "$ref": "#/definitions/scope" },
+        "scenarioBehavior": { "$ref": "#/definitions/scope" },
+        "visualEvidence": { "$ref": "#/definitions/scope" },
+        "standaloneBuild": { "$ref": "#/definitions/scope" },
+        "standaloneLaunch": { "$ref": "#/definitions/scope" },
+        "prebuiltIdentity": { "$ref": "#/definitions/scope" }
+      }
+    },
+    "artifacts": { "$ref": "#/definitions/object" },
+    "verificationScopes": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "warnings": { "type": "array", "items": { "$ref": "#/definitions/diagnostic" } },
+    "failures": { "type": "array", "items": { "$ref": "#/definitions/diagnostic" } },
+    "blockers": { "type": "array", "items": { "$ref": "#/definitions/diagnostic" } },
+    "finalStatus": { "enum": ["ORIGINAL_PROJECT_CHANGED", "VERIFICATION_BLOCKED", "PLAYER_FAILED", "PLAYER_VERIFIED", "PLAYER_LAUNCH_VERIFIED"] },
+    "evidence": { "type": "array", "items": { "$ref": "#/definitions/object" } }
+  },
+  "definitions": {
+    "object": { "type": "object" },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "reason"],
+      "properties": {
+        "status": { "enum": ["NOT_VERIFIED", "VERIFIED_SUCCESS", "VERIFIED_FAILURE", "BLOCKED"] },
+        "reason": { "type": "string" }
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "check", "path", "message"],
+      "properties": {
+        "code": { "type": "string" },
+        "check": { "type": "string" },
+        "path": { "type": ["string", "null"] },
+        "message": { "type": "string" }
+      }
+    }
+  }
+}

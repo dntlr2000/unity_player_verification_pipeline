@@ -7,7 +7,7 @@ description: "Run approved Unity Windows Test Player, source-only Player scenari
 
 Use the bundled PowerShell entrypoint as the sole source of dynamic Player verification truth. It preserves the source project, accepts only exact approved Unity/Test Framework/Windows Support identities, controls spawned processes, and requires mode-specific receipts before making a positive claim.
 
-Component `0.3.1` enables all four modes. Test Player modes remain sealed to Mono; instrumented Standalone mode accepts only exact approved Mono or IL2CPP tuples. The Standalone runtime directly traverses nested scenario coroutines so their exceptions produce bounded failure receipts instead of escaping to Unity's coroutine scheduler.
+Component `0.4.0` enables all four modes. Test Player modes remain sealed to Mono; instrumented Standalone mode accepts only exact approved Mono or IL2CPP tuples. The Standalone runtime directly traverses nested scenario coroutines so their exceptions produce bounded failure receipts instead of escaping to Unity's coroutine scheduler. IL2CPP selection uses approved build-toolchain profiles and records Visual Studio host metadata separately.
 
 ## Invocation policy
 
@@ -29,7 +29,15 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File $runner `
 
 Use `-TestFilter`, `-TestCategory`, and `-AssemblyNames` only in `TEST_PLAYER`. Use `-ScenarioBundlePath` only in scenario modes. Use `-BuildRoot`, `-PlayerExecutable`, and optional `-BuildReceiptPath` only in `PREBUILT_STANDALONE`. Never append arbitrary Unity or Player arguments.
 
-For `INSTRUMENTED_STANDALONE`, require a reviewed Standalone scenario bundle and choose `-ScriptingBackend Mono`, `IL2CPP`, or `Project`. Treat `Project` as a request to preserve the serialized Standalone backend; it still must resolve to an approved exact tuple. For `PREBUILT_STANDALONE`, execute only the exact user-supplied EXE. Never invent, edit, or substitute a build receipt.
+For `INSTRUMENTED_STANDALONE`, require a reviewed Standalone scenario bundle and choose `-ScriptingBackend Mono`, `IL2CPP`, or `Project`. Treat `Project` as a request to preserve the serialized Standalone backend; it still must resolve to an approved exact tuple. For IL2CPP, use optional `-ToolchainProfileId` and `-VisualStudioPath` only to constrain an otherwise ambiguous installed-candidate selection. They never authorize a `CANDIDATE` or `RETIRED` profile. For `PREBUILT_STANDALONE`, execute only the exact user-supplied EXE. Never invent, edit, or substitute a build receipt.
+
+## IL2CPP approval boundary
+
+- Treat build-tool bytes and header/library trees as the approval identity; treat Visual Studio product version, instance, and path as separately reported host evidence.
+- Permit host-only approval drift as a warning only when the approved build identity matches exactly.
+- Block build-identity mismatch, zero or multiple approved matches, candidate-only or retired-only matches, missing Bee evidence, observed tool-path mismatch, and all within-run build or host drift.
+- Never edit a compatibility profile from `CANDIDATE` to `APPROVED` while running production verification. Candidate collection and approval-matrix execution are separate reviewed workflows.
+- Accept receipt schema `1.0.0` only for explicitly requested legacy prebuilt replay; fresh builds require schema `1.1.0`.
 
 ## Source-only scenarios
 

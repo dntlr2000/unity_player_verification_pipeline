@@ -19,12 +19,13 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\skills\codex\unity-pla
 | 0.2.0 | `SCENARIO_TEST_PLAYER` | A reviewed source-only scenario passed in an approved Mono Windows Test Player |
 | 0.3.0 | `INSTRUMENTED_STANDALONE`, `PREBUILT_STANDALONE` | Receipt-backed standalone behavior passed, or an opaque EXE met the narrower launch-only contract |
 | 0.3.1 | P3 runtime hardening | Nested scenario coroutine failures emit an atomic `FAILED` receipt and terminate the Player promptly |
+| 0.4.0 | P3 IL2CPP toolchain profiles | Approved build-tool bytes are selected independently from maintenance-sensitive Visual Studio host metadata |
 
-Current release: `0.3.1`. All four modes are enabled. P1/P2 remain sealed to `StandaloneWindows64 + Mono`; P3 instrumented builds accept only the exact approved Mono or IL2CPP tuples for Unity `2022.3.62f3`, `6000.0.69f1`, and `6000.5.3f1`.
+Current release: `0.4.0`. All four modes are enabled. P1/P2 remain sealed to `StandaloneWindows64 + Mono`; P3 instrumented builds accept only the exact approved Mono or IL2CPP tuples for Unity `2022.3.62f3`, `6000.0.69f1`, and `6000.5.3f1`. IL2CPP approval is now attached to a build-toolchain profile, while Visual Studio product version, instance, and installation path are retained as separate host evidence.
 
 `PLAYER_VERIFIED` never means device input, production-binary equivalence, performance, subjective quality, or release readiness. An opaque executable can produce only `PLAYER_LAUNCH_VERIFIED`.
 
-See [architecture.md](docs/architecture.md) for trust boundaries, [the Skill guide](docs/skills/unity-player-verification.md) for operator usage, and [the P3 acceptance record](docs/validation/unity-player-verification-p3-real-unity-acceptance.md) for the retained Mono and IL2CPP approval evidence.
+See [architecture.md](docs/architecture.md) for trust boundaries, [the Skill guide](docs/skills/unity-player-verification.md) for operator usage, [the P3 acceptance record](docs/validation/unity-player-verification-p3-real-unity-acceptance.md) for the sealed v0.3 evidence, and [the v0.4 toolchain-profile record](docs/validation/unity-player-verification-v040-toolchain-acceptance.md) for the split-identity approval gate.
 
 For a source-only Standalone scenario:
 
@@ -34,6 +35,19 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\skills\codex\unity-pla
   -ProjectRoot E:\Unity\Project `
   -ScenarioBundlePath E:\CodexValidation\reviewed-player-scenario `
   -ScriptingBackend Mono `
+  -ArtifactsRoot E:\CodexValidation\unity-player-verification
+```
+
+If more than one installed candidate can satisfy an approved IL2CPP profile, disambiguate with the reviewed profile and Visual Studio root. These parameters constrain selection; they cannot approve a candidate.
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\skills\codex\unity-player-verification\scripts\invoke-unity-player-verification.ps1 `
+  -Mode INSTRUMENTED_STANDALONE `
+  -ProjectRoot E:\Unity\Project `
+  -ScenarioBundlePath E:\CodexValidation\reviewed-player-scenario `
+  -ScriptingBackend IL2CPP `
+  -ToolchainProfileId msvc-14-51-36231-sdk-10-0-26100-0-8fff423cab47 `
+  -VisualStudioPath "C:\Program Files\Microsoft Visual Studio\18\Community" `
   -ArtifactsRoot E:\CodexValidation\unity-player-verification
 ```
 
