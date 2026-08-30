@@ -25,6 +25,13 @@ Current release: `0.4.0`. All four modes are enabled. P1/P2 remain sealed to `St
 
 `PLAYER_VERIFIED` never means device input, production-binary equivalence, performance, subjective quality, or release readiness. An opaque executable can produce only `PLAYER_LAUNCH_VERIFIED`.
 
+### v0.4 security and compatibility notes
+
+- A Visual Studio product-version, instance, or installation-path difference from the approval host is warning-only when the approved build-toolchain identity still matches exactly. High-assurance operators should treat `IL2CPP_HOST_ENVIRONMENT_DRIFT` as requiring manual review; v0.4 has no built-in strict-host switch. Any build or host identity change during one run remains a blocker.
+- Result schema `1.1.0` applies to every Player mode, including Mono. Fresh P3 builds emit Standalone receipt schema `1.1.0`; schema `1.0.0` is retained only for explicit legacy prebuilt replay. Existing commands remain valid, but strict result/receipt consumers must update their schema handling.
+- Mono compatibility tuples and positive claims are unchanged. Mono does not select an IL2CPP toolchain profile, although malformed global compatibility-profile data still blocks the registry fail-closed.
+- `$unity-play-verification` remains a separate Editor PlayMode pipeline with its own repository, result contract, and installation name. Player v0.4 does not import or execute it at runtime.
+
 See [architecture.md](docs/architecture.md) for trust boundaries, [the Skill guide](docs/skills/unity-player-verification.md) for operator usage, [the P3 acceptance record](docs/validation/unity-player-verification-p3-real-unity-acceptance.md) for the sealed v0.3 evidence, and [the v0.4 toolchain-profile record](docs/validation/unity-player-verification-v040-toolchain-acceptance.md) for the split-identity approval gate.
 
 For a source-only Standalone scenario:

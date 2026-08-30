@@ -35,11 +35,23 @@ The Unity Windows Support tree, `il2cpp.exe`, and `bee_backend.exe` remain compa
 
 Compatibility schema `1.2.0` stores reusable toolchain profiles with `CANDIDATE`, `APPROVED`, or `RETIRED` state. The verifier inventories all complete Visual Studio/MSVC/SDK candidates, matches only profiles referenced by the exact Unity compatibility entry, and requires one deterministic approved match. Zero matches, candidate-only or retired-only matches, and unresolved multiple matches fail closed. Optional profile/path parameters may disambiguate installed candidates but can never change approval state.
 
+### Security trade-off and residual evidence boundary
+
+Separating host metadata from build-affecting bytes intentionally broadens the accepted host set relative to v0.3.1. A Visual Studio product-version, instance, or absolute-path difference between approval and a later run emits `IL2CPP_HOST_ENVIRONMENT_DRIFT` but does not by itself prevent `PLAYER_VERIFIED` when the approved build identity is exact. This avoids reapproval for servicing-only changes. Environments that treat the Visual Studio instance itself as a supply-chain identity must apply a manual policy that rejects this warning; v0.4 does not expose a strict-host option.
+
+The build identity covers the fixed native tools and dependency/header/library trees listed above, not the entire Visual Studio installation, operating system, environment variables, or workload manifest. Bee evidence proves that the isolated DAG contained the selected `cl.exe`, `lib.exe`, and `link.exe` paths; it is stronger than v0.3.1's preflight-only identity but is not OS-level process attestation. The verifier remains a same-user integrity boundary rather than a hostile-build sandbox.
+
+Profile and compatibility approval paths and SHA-256 values are audit metadata inside the trusted production registry. Runtime validation checks their presence and digest shape but does not dereference the retained external acceptance summary on every verification. Repository integrity and reviewed release promotion therefore remain the approval root of trust.
+
+Compatibility schema `1.2.0` is validated as one fail-closed registry. Consequently, malformed or tampered IL2CPP profile data can block a Mono request even though Mono does not select a native profile. This is an availability coupling, not a relaxation of Mono evidence. The three approved Mono tuples, Test Player command contract, NUnit agreement, process control, and positive-claim semantics remain unchanged.
+
 Backend availability is derived from the selected editor's Windows Support `Variations` tree. A shared editor `Data/il2cpp` directory is not sufficient evidence of Windows IL2CPP Build Support. Release `0.3.0` contains exact approved Mono and IL2CPP tuples for all three supported Unity editors. Generated IL2CPP files are hashed through extended-length Windows paths so full-tree identity remains deterministic beyond legacy `MAX_PATH`.
 
 Release `0.3.1` hardens only the instrumented Standalone runtime. Its runner expands nested `IEnumerator` frames itself, calls every nested `MoveNext()` and `Current` inside one exception boundary, writes the partial assertion/capture snapshot into an atomic failure receipt, and exits nonzero without waiting for the external process timeout.
 
 Fresh v0.4 Standalone builds write receipt schema `1.1.0`, including profile ID, build-identity algorithm/hash, and host-identity algorithm/hash. Receipt schema `1.0.0` remains readable only for explicit prebuilt replay and produces a legacy warning; it cannot authorize a fresh build. A receipt whose identity algorithm is unknown or whose current tree/tool evidence differs is blocked.
+
+Result schema `1.1.0` is emitted by all four modes, including Mono Test Player modes. This is a versioned machine-interface change even where verification behavior is unchanged; consumers that require result schema `1.0.0` must migrate before processing v0.4 output. New Mono Standalone receipts keep every split IL2CPP identity field null or empty as required by receipt schema `1.1.0`.
 
 Receipt-backed prebuilt execution binds the retained scenario identity to a fresh session token and requires a new runtime receipt. Receipt-free prebuilt execution does not trust or infer gameplay state. It records the explicit EXE and build-tree identity, applies only the fixed windowed/log arguments, requires a continuously responsive window for at least 10 seconds, requests `CloseMainWindow`, and uses the Job Object to guarantee a zero-process end state. Runtime changes to the supplied build tree block either verdict.
 
